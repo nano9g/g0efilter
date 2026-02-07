@@ -19,7 +19,6 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    environment: dockerhub
     strategy:
       matrix:
         filter_mode: [https, dns]
