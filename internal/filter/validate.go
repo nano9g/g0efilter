@@ -21,66 +21,51 @@ func sanitizeHost(host string) (string, bool) {
 // sanitizeHostWithLogger validates and sanitizes a host/domain with trace logging support.
 // The source parameter helps identify where the validation is being called from (e.g., "http", "https").
 func sanitizeHostWithLogger(host string, logger *slog.Logger, source string) (string, bool) {
-	logDebug := makeLogFunc(logger, source)
+	log := validationLogger(logger, source)
 
-	logDebug(".validation_start", "host", host, "length", len(host))
+	log("validation_start", "host", host, "length", len(host))
 
 	if !hasValidLength(host) {
-		logDebug(".validation_failed",
-			"host", host,
-			"reason", "invalid_length",
-			"length", len(host),
-			"max", maxHostLength,
-		)
+		log("validation_failed", "host", host, "reason", "invalid_length",
+			"length", len(host), "max", maxHostLength)
 
 		return "", false
 	}
 
 	if !hasValidCharacters(host) {
-		logDebug(".validation_failed",
-			"host", host,
-			"reason", "invalid_characters",
-		)
+		log("validation_failed", "host", host, "reason", "invalid_characters")
 
 		return "", false
 	}
 
 	if !hasValidStructure(host) {
-		reason := determineStructureFailureReason(host)
-		logDebug(".validation_failed",
-			"host", host,
-			"reason", "invalid_structure",
-			"detail", reason,
-		)
+		log("validation_failed", "host", host, "reason", "invalid_structure",
+			"detail", determineStructureFailureReason(host))
 
 		return "", false
 	}
 
 	if !hasValidLabels(host) {
-		reason := determineLabelFailureReason(host)
-		logDebug(".validation_failed",
-			"host", host,
-			"reason", "invalid_labels",
-			"detail", reason,
-		)
+		log("validation_failed", "host", host, "reason", "invalid_labels",
+			"detail", determineLabelFailureReason(host))
 
 		return "", false
 	}
 
-	logDebug(".validation_success", "host", host)
+	log("validation_success", "host", host)
 
 	return host, true
 }
 
-// makeLogFunc creates a logging function that only logs when logger and source are valid.
-// Returns a no-op function if logger is nil or source is empty.
-func makeLogFunc(logger *slog.Logger, source string) func(suffix string, args ...any) {
+// validationLogger returns a log function scoped to the given source prefix.
+// Returns a no-op when logger or source is not set.
+func validationLogger(logger *slog.Logger, source string) func(suffix string, args ...any) {
 	if logger == nil || source == "" {
 		return func(_ string, _ ...any) {}
 	}
 
 	return func(suffix string, args ...any) {
-		logger.Debug(source+suffix, args...)
+		logger.Debug(source+"."+suffix, args...)
 	}
 }
 
@@ -100,10 +85,6 @@ func determineStructureFailureReason(host string) string {
 
 	if strings.Contains(host, "..") {
 		return "contains_double_dot"
-	}
-
-	if strings.Contains(host, "--") {
-		return "contains_double_hyphen"
 	}
 
 	return "unknown"
@@ -128,32 +109,27 @@ func determineLabelFailureReason(host string) string {
 // checkLabelValidity checks if a label is valid and returns failure reason if invalid.
 func checkLabelValidity(label string, isTLD bool) string {
 	if !isValidLabel(label) {
-		if len(label) < 1 {
+		switch {
+		case len(label) < 1:
 			return "empty_label"
-		}
-
-		if len(label) > maxLabelLength {
+		case len(label) > maxLabelLength:
 			return "label_too_long"
-		}
-
-		if label[0] == '-' {
+		case label[0] == '-':
 			return "label_starts_with_hyphen"
-		}
-
-		if label[len(label)-1] == '-' {
+		case label[len(label)-1] == '-':
 			return "label_ends_with_hyphen"
+		default:
+			return "invalid_label"
 		}
 	}
 
 	// Final label (TLD) validation
-	if isTLD {
+	if isTLD && !isValidTLD(label) {
 		if len(label) < 2 {
 			return "tld_too_short"
 		}
 
-		if isAllNumeric(label) {
-			return "tld_all_numeric"
-		}
+		return "tld_all_numeric"
 	}
 
 	return ""
@@ -185,7 +161,7 @@ func hasValidStructure(host string) bool {
 		return false
 	}
 
-	if strings.Contains(host, "..") || strings.Contains(host, "--") {
+	if strings.Contains(host, "..") {
 		return false
 	}
 

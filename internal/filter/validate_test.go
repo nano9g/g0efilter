@@ -40,6 +40,11 @@ func TestSanitizeHostValid(t *testing.T) {
 			wantHost: "my-api.my-site.com",
 		},
 		{
+			name:     "valid with double hyphen (punycode-style)",
+			input:    "xn--mnchen-3ya.de",
+			wantHost: "xn--mnchen-3ya.de",
+		},
+		{
 			name:     "valid with numbers",
 			input:    "api1.example2.com",
 			wantHost: "api1.example2.com",
@@ -113,7 +118,6 @@ func TestSanitizeHostInvalid(t *testing.T) {
 		{name: "trailing hyphen", input: "example-.com"},
 		{name: "leading hyphen", input: "-example.com"},
 		{name: "double dot", input: "example..com"},
-		{name: "double hyphen", input: "example--site.com"},
 		{name: "label starting with hyphen", input: "example.-bad.com"},
 		{name: "label ending with hyphen", input: "example.bad-.com"},
 

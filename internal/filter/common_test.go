@@ -53,12 +53,12 @@ func TestNormalizeDomain(t *testing.T) {
 func TestAllowedHost(t *testing.T) {
 	t.Parallel()
 
-	allowlist := []string{
+	allowlist := NormalizePatterns([]string{
 		"example.com",
 		"*.google.com",
 		"test.org",
 		"*.sub.domain.com",
-	}
+	})
 
 	tests := []struct {
 		name     string

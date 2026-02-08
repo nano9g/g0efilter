@@ -27,22 +27,13 @@ var errPortOutOfRange = errors.New("port out of range")
 
 // Version returns the nftables version string.
 func Version(ctx context.Context) (string, error) {
-	cmd := exec.CommandContext(ctx, "nft", "--version")
-
-	var out bytes.Buffer
-
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-
-	err := cmd.Run()
+	out, err := exec.CommandContext(ctx, "nft", "--version").Output()
 	if err != nil {
 		return "", fmt.Errorf("failed to get nft version: %w", err)
 	}
 
 	// Output is typically "nftables v1.0.9 (Spark In The Dark)"
-	// We want to clean it up to just the version
-	version := strings.TrimSpace(out.String())
-	version = strings.TrimPrefix(version, "nftables ")
+	version := strings.TrimPrefix(strings.TrimSpace(string(out)), "nftables ")
 
 	return version, nil
 }
@@ -312,9 +303,6 @@ func GenerateNftRuleset(allowlist []string, httpsPort, httpPort, dnsPort int, mo
 	}
 
 	allowSet := strings.Join(allowlist, ", ")
-	if strings.TrimSpace(allowSet) == "" {
-		allowSet = ""
-	}
 
 	var filterRules string
 	if mode == filter.ModeDNS {
@@ -338,11 +326,6 @@ func deleteTableIfExists(ctx context.Context, family, table string) error {
 	defer cancelProbe()
 
 	probe := exec.CommandContext(ctxProbe, "nft", "list", "table", family, table)
-
-	var bout bytes.Buffer
-
-	probe.Stdout = &bout
-	probe.Stderr = &bout
 
 	err := probe.Run()
 	if err != nil {
@@ -411,45 +394,67 @@ func setupLogger(lg *slog.Logger) *slog.Logger {
 	return lg.With(base...)
 }
 
+// PacketInfo holds parsed network layer information from a raw packet.
+type PacketInfo struct {
+	Src             string
+	Dst             string
+	Protocol        string
+	SourceIP        string
+	DestinationIP   string
+	SourcePort      int
+	DestinationPort int
+}
+
 // parsePacketInfo extracts network layer information from a raw packet payload.
-func parsePacketInfo(payload []byte) (string, string, string, string, string, int, int) {
+func parsePacketInfo(payload []byte) PacketInfo {
+	if len(payload) < minPacketSize {
+		return PacketInfo{}
+	}
+
 	packet := gopacket.NewPacket(payload, layers.LayerTypeIPv4, gopacket.Default)
 
-	var src, dst, proto, sourceIP, destinationIP string
+	ipLayer := packet.Layer(layers.LayerTypeIPv4)
+	if ipLayer == nil {
+		return PacketInfo{}
+	}
 
-	var sourcePort, destinationPort int
+	ip := ipLayer.(*layers.IPv4) //nolint:forcetypeassert
 
-	if ipLayer := packet.Layer(layers.LayerTypeIPv4); ipLayer != nil {
-		ip := ipLayer.(*layers.IPv4) //nolint:forcetypeassert
+	if tcpLayer := packet.Layer(layers.LayerTypeTCP); tcpLayer != nil {
+		tcp := tcpLayer.(*layers.TCP) //nolint:forcetypeassert
 
-		if tcpLayer := packet.Layer(layers.LayerTypeTCP); tcpLayer != nil {
-			tcp := tcpLayer.(*layers.TCP) //nolint:forcetypeassert
-			src = fmt.Sprintf("%s:%d", ip.SrcIP, tcp.SrcPort)
-			dst = fmt.Sprintf("%s:%d", ip.DstIP, tcp.DstPort)
-			proto = "TCP"
-			sourceIP = ip.SrcIP.String()
-			sourcePort = int(tcp.SrcPort)
-			destinationIP = ip.DstIP.String()
-			destinationPort = int(tcp.DstPort)
-		} else if udpLayer := packet.Layer(layers.LayerTypeUDP); udpLayer != nil {
-			udp := udpLayer.(*layers.UDP) //nolint:forcetypeassert
-			src = fmt.Sprintf("%s:%d", ip.SrcIP, udp.SrcPort)
-			dst = fmt.Sprintf("%s:%d", ip.DstIP, udp.DstPort)
-			proto = "UDP"
-			sourceIP = ip.SrcIP.String()
-			sourcePort = int(udp.SrcPort)
-			destinationIP = ip.DstIP.String()
-			destinationPort = int(udp.DstPort)
-		} else {
-			src = ip.SrcIP.String()
-			dst = ip.DstIP.String()
-			proto = strconv.Itoa(int(ip.Protocol))
-			sourceIP = ip.SrcIP.String()
-			destinationIP = ip.DstIP.String()
+		return PacketInfo{
+			Src:             fmt.Sprintf("%s:%d", ip.SrcIP, tcp.SrcPort),
+			Dst:             fmt.Sprintf("%s:%d", ip.DstIP, tcp.DstPort),
+			Protocol:        "TCP",
+			SourceIP:        ip.SrcIP.String(),
+			DestinationIP:   ip.DstIP.String(),
+			SourcePort:      int(tcp.SrcPort),
+			DestinationPort: int(tcp.DstPort),
 		}
 	}
 
-	return src, dst, proto, sourceIP, destinationIP, sourcePort, destinationPort
+	if udpLayer := packet.Layer(layers.LayerTypeUDP); udpLayer != nil {
+		udp := udpLayer.(*layers.UDP) //nolint:forcetypeassert
+
+		return PacketInfo{
+			Src:             fmt.Sprintf("%s:%d", ip.SrcIP, udp.SrcPort),
+			Dst:             fmt.Sprintf("%s:%d", ip.DstIP, udp.DstPort),
+			Protocol:        "UDP",
+			SourceIP:        ip.SrcIP.String(),
+			DestinationIP:   ip.DstIP.String(),
+			SourcePort:      int(udp.SrcPort),
+			DestinationPort: int(udp.DstPort),
+		}
+	}
+
+	return PacketInfo{
+		Src:           ip.SrcIP.String(),
+		Dst:           ip.DstIP.String(),
+		Protocol:      strconv.Itoa(int(ip.Protocol)),
+		SourceIP:      ip.SrcIP.String(),
+		DestinationIP: ip.DstIP.String(),
+	}
 }
 
 // mapPrefixToAction maps nftables log prefix strings to action types.
@@ -459,9 +464,9 @@ func mapPrefixToAction(prefix string) string {
 	switch {
 	case strings.Contains(pl, "redirect"):
 		return filter.ActionRedirected
-	case strings.Contains(pl, "block") || strings.Contains(pl, "blocked"):
+	case strings.Contains(pl, "block"):
 		return "BLOCKED"
-	case strings.Contains(pl, "allow") || strings.Contains(pl, "allowed"):
+	case strings.Contains(pl, "allow"):
 		return "ALLOWED"
 	default:
 		return ""
@@ -472,10 +477,7 @@ func mapPrefixToAction(prefix string) string {
 func buildLogFields(
 	src, dst, proto, sourceIP, destinationIP, flowID string, sourcePort, destinationPort, payloadLen int,
 ) []any {
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-
 	fields := []any{
-		"time", now,
 		"protocol", proto,
 		"payload_len", payloadLen,
 	}
@@ -515,15 +517,18 @@ func buildLogFields(
 func processActionEvent(
 	lg *slog.Logger,
 	action, flowID string,
-	src, dst, proto, sourceIP, destinationIP string,
-	sourcePort, destinationPort, payloadLen int,
+	pkt PacketInfo,
+	payloadLen int,
 ) {
 	// If we have a recent synthetic for this flow, suppress kernel nflog REDIRECTED to avoid duplicates
 	if action == filter.ActionRedirected && flowID != "" && filter.IsSyntheticRecent(flowID) {
 		return // handled, skip logging
 	}
 
-	fields := buildLogFields(src, dst, proto, sourceIP, destinationIP, flowID, sourcePort, destinationPort, payloadLen)
+	fields := buildLogFields(
+		pkt.Src, pkt.Dst, pkt.Protocol, pkt.SourceIP, pkt.DestinationIP,
+		flowID, pkt.SourcePort, pkt.DestinationPort, payloadLen,
+	)
 	fields = append(fields, "action", action)
 
 	// Level policy: REDIRECTED and ALLOWED at DEBUG, BLOCKED at INFO
@@ -552,9 +557,9 @@ func createNflogHook(lg *slog.Logger) func(nflog.Attribute) int {
 			return 0
 		}
 
-		src, dst, proto, sourceIP, destinationIP, sourcePort, destinationPort := parsePacketInfo(*attrs.Payload)
+		pkt := parsePacketInfo(*attrs.Payload)
 
-		if src == "" && dst == "" {
+		if pkt.Src == "" && pkt.Dst == "" {
 			// Unsupported network layer
 			return 0
 		}
@@ -563,22 +568,21 @@ func createNflogHook(lg *slog.Logger) func(nflog.Attribute) int {
 
 		// Compute flow id
 		flowID := ""
-		if sourceIP != "" && destinationIP != "" {
-			flowID = filter.FlowID(sourceIP, sourcePort, destinationIP, destinationPort, proto)
+		if pkt.SourceIP != "" && pkt.DestinationIP != "" {
+			flowID = filter.FlowID(pkt.SourceIP, pkt.SourcePort, pkt.DestinationIP, pkt.DestinationPort, pkt.Protocol)
 		}
 
 		if action != "" {
-			processActionEvent(
-				lg, action, flowID,
-				src, dst, proto, sourceIP, destinationIP,
-				sourcePort, destinationPort, payloadLen,
-			)
+			processActionEvent(lg, action, flowID, pkt, payloadLen)
 
 			return 0
 		}
 
 		// Minimal debug for non-action packets (will include hostname/component from lg context)
-		lg.Debug("nflog.packet", "prefix", prefix, "protocol", proto, "src", src, "dst", dst, "payload_len", payloadLen)
+		lg.Debug("nflog.packet",
+			"prefix", prefix, "protocol", pkt.Protocol,
+			"src", pkt.Src, "dst", pkt.Dst, "payload_len", payloadLen,
+		)
 
 		return 0
 	}

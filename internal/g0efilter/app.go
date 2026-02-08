@@ -2,6 +2,7 @@
 package g0efilter
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -11,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -62,8 +64,8 @@ func Run(version, date, commit string) error {
 	cfg = normalizeMode(cfg, lg)
 
 	logStartupInfo(lg, cfg, version, date, commit)
-	logDashboardInfo(lg)
-	logNotificationInfo(lg)
+	logDashboardInfo(lg, cfg)
+	logNotificationInfo(lg, cfg)
 
 	err := validatePorts(cfg, lg)
 	if err != nil {
@@ -139,6 +141,8 @@ type config struct {
 	dashboardHost       string
 	dashboardAPIKey     string
 	unblockPollInterval time.Duration
+	notificationHost    string
+	notificationKey     string
 }
 
 // loadConfig reads configuration from environment variables.
@@ -156,6 +160,8 @@ func loadConfig() config {
 		dashboardHost:       strings.TrimSpace(getenvDefault("DASHBOARD_HOST", "")),
 		dashboardAPIKey:     strings.TrimSpace(getenvDefault("DASHBOARD_API_KEY", "")),
 		unblockPollInterval: parseDurationDefault(getenvDefault("UNBLOCK_POLL_INTERVAL", "10s"), 10*time.Second),
+		notificationHost:    strings.TrimSpace(getenvDefault("NOTIFICATION_HOST", "")),
+		notificationKey:     strings.TrimSpace(getenvDefault("NOTIFICATION_KEY", "")),
 	}
 }
 
@@ -267,9 +273,9 @@ func printVersion(version, date, commit string) {
 		short = commit[:7]
 	}
 
-	fmt.Fprintf(os.Stderr, "%s v%s %s (%s)\n", name, version, short, date)
-	fmt.Fprintf(os.Stderr, "Copyright (C) %s %s\n", licenseYear, licenseOwner)
-	fmt.Fprintf(os.Stderr, "Licensed under the %s license\n", licenseType)
+	_, _ = fmt.Fprintf(os.Stdout, "%s v%s %s (%s)\n", name, version, short, date)
+	_, _ = fmt.Fprintf(os.Stdout, "Copyright (C) %s %s\n", licenseYear, licenseOwner)
+	_, _ = fmt.Fprintf(os.Stdout, "Licensed under the %s license\n", licenseType)
 }
 
 func logStartupInfo(lg *slog.Logger, cfg config, version, date, commit string) {
@@ -319,15 +325,14 @@ func logStartupInfo(lg *slog.Logger, cfg config, version, date, commit string) {
 	}
 }
 
-func logDashboardInfo(lg *slog.Logger) {
-	dhost := strings.TrimSpace(getenvDefault("DASHBOARD_HOST", ""))
-	if dhost == "" {
+func logDashboardInfo(lg *slog.Logger, cfg config) {
+	if cfg.dashboardHost == "" {
 		lg.Info("dashboard.logging_disabled")
 
 		return
 	}
 
-	disp := dhost
+	disp := cfg.dashboardHost
 	if !strings.HasPrefix(disp, "http://") && !strings.HasPrefix(disp, "https://") {
 		disp = "http://" + disp
 	}
@@ -335,12 +340,9 @@ func logDashboardInfo(lg *slog.Logger) {
 	lg.Info("dashboard.logging_enabled", "host", disp)
 }
 
-func logNotificationInfo(lg *slog.Logger) {
-	nhost := strings.TrimSpace(getenvDefault("NOTIFICATION_HOST", ""))
-	ntoken := strings.TrimSpace(getenvDefault("NOTIFICATION_KEY", ""))
-
-	if nhost != "" && ntoken != "" {
-		lg.Info("notifications.enabled", "host", nhost)
+func logNotificationInfo(lg *slog.Logger, cfg config) {
+	if cfg.notificationHost != "" && cfg.notificationKey != "" {
+		lg.Info("notifications.enabled", "host", cfg.notificationHost)
 
 		return
 	}
@@ -349,24 +351,19 @@ func logNotificationInfo(lg *slog.Logger) {
 }
 
 func normalizeMode(cfg config, lg *slog.Logger) config {
-	mode := strings.ToLower(strings.TrimSpace(cfg.mode))
-	validModes := map[string]bool{
-		filter.ModeHTTPS: true,
-		filter.ModeDNS:   true,
-	}
+	switch cfg.mode {
+	case filter.ModeHTTPS, filter.ModeDNS:
+		return cfg
+	case "":
+		cfg.mode = filter.ModeHTTPS
 
-	if mode == "" {
+		return cfg
+	default:
+		lg.Warn("filter_mode.invalid", "mode", cfg.mode, "defaulting_to", filter.ModeHTTPS)
 		cfg.mode = filter.ModeHTTPS
 
 		return cfg
 	}
-
-	if !validModes[mode] {
-		lg.Warn("filter_mode.invalid", "mode", cfg.mode, "defaulting_to", filter.ModeHTTPS)
-		cfg.mode = filter.ModeHTTPS
-	}
-
-	return cfg
 }
 
 func validatePorts(cfg config, lg *slog.Logger) error {
@@ -464,10 +461,7 @@ func startServices(ctx context.Context, cfg config, domains []string, lg *slog.L
 	switch cfg.mode {
 	case filter.ModeDNS:
 		startDNSService(ctx, cfg.dnsPort, domains, opts, lg)
-	case filter.ModeHTTPS:
-		startHTTPSServices(ctx, cfg, domains, opts, lg)
 	default:
-		lg.Warn("filter_mode.invalid", "mode", cfg.mode, "defaulting_to", filter.ModeHTTPS)
 		startHTTPSServices(ctx, cfg, domains, opts, lg)
 	}
 }
@@ -593,6 +587,9 @@ func pollPolicyChanges(
 	}
 }
 
+// sendLatest sends the most recent policy update to reloadCh, dropping any
+// stale update already buffered ("drop oldest, push newest") so the consumer
+// always sees the latest version.
 func sendLatest(ctx context.Context, reloadCh chan policyUpdate, upd policyUpdate) {
 	select {
 	case <-ctx.Done():
@@ -600,6 +597,7 @@ func sendLatest(ctx context.Context, reloadCh chan policyUpdate, upd policyUpdat
 	default:
 	}
 
+	// Fast path: channel is empty, send directly.
 	select {
 	case reloadCh <- upd:
 		return
@@ -670,8 +668,6 @@ func parseDurationDefault(s string, def time.Duration) time.Duration {
 }
 
 // pollRemoteUnblocks polls the dashboard for pending unblock requests and applies them to the policy.
-//
-
 func pollRemoteUnblocks(
 	ctx context.Context,
 	cfg config,
@@ -743,12 +739,12 @@ func fetchPendingUnblocks(
 	cfg config,
 	lg *slog.Logger,
 ) ([]unblockRequest, error) {
-	url := baseURL + "/api/v1/unblocks"
+	endpoint := baseURL + "/api/v1/unblocks"
 	if cfg.hostname != "" {
-		url += "?hostname=" + cfg.hostname
+		endpoint += "?hostname=" + url.QueryEscape(cfg.hostname)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -757,7 +753,7 @@ func fetchPendingUnblocks(
 
 	lg.Log(ctx, logging.LevelTrace, "remote_unblock.request",
 		"method", req.Method,
-		"url", url,
+		"url", endpoint,
 		"has_api_key", cfg.dashboardAPIKey != "",
 	)
 
@@ -771,7 +767,7 @@ func fetchPendingUnblocks(
 	if resp.StatusCode != http.StatusOK {
 		lg.Log(ctx, logging.LevelTrace, "remote_unblock.response",
 			"status", resp.StatusCode,
-			"url", url,
+			"url", endpoint,
 		)
 
 		return nil, fmt.Errorf("%w: %d", errUnexpectedHTTPStatus, resp.StatusCode)
@@ -794,9 +790,7 @@ func processUnblockBatch(
 	cfg config,
 	lg *slog.Logger,
 	unblocks []unblockRequest,
-) bool {
-	applied := false
-
+) {
 	for _, ub := range unblocks {
 		err := applyUnblock(cfg.policyPath, ub, lg)
 		if err != nil {
@@ -810,8 +804,6 @@ func processUnblockBatch(
 			continue
 		}
 
-		applied = true
-
 		// Acknowledge the unblock
 		err = acknowledgeUnblock(ctx, client, baseURL, cfg.dashboardAPIKey, ub.ID)
 		if err != nil {
@@ -824,8 +816,6 @@ func processUnblockBatch(
 			)
 		}
 	}
-
-	return applied
 }
 
 func applyUnblock(policyPath string, ub unblockRequest, lg *slog.Logger) error {
@@ -852,13 +842,16 @@ func applyUnblock(policyPath string, ub unblockRequest, lg *slog.Logger) error {
 }
 
 func acknowledgeUnblock(ctx context.Context, client *http.Client, baseURL, apiKey, id string) error {
-	body := fmt.Sprintf(`{"id":"%s"}`, id)
+	body, err := json.Marshal(map[string]string{"id": id})
+	if err != nil {
+		return fmt.Errorf("marshal ack body: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(
 		ctx,
 		http.MethodPost,
 		baseURL+"/api/v1/unblocks/ack",
-		strings.NewReader(body),
+		bytes.NewReader(body),
 	)
 	if err != nil {
 		return fmt.Errorf("create ack request: %w", err)

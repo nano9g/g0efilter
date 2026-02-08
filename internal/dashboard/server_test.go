@@ -375,6 +375,10 @@ func TestProcessPayload(t *testing.T) {
 			"source_port": float64(12345),
 			"protocol":    "TCP",
 			"version":     "1.0.0",
+			"flow_id":     "abc123",
+			"hostname":    "node-01",
+			"src":         "eth0",
+			"dst":         "eth1",
 		}
 
 		entry := srv.processPayload(context.Background(), payload, "10.0.0.1")
@@ -408,6 +412,22 @@ func TestProcessPayload(t *testing.T) {
 
 		if entry.Version != "1.0.0" {
 			t.Errorf("Version = %s, want 1.0.0", entry.Version)
+		}
+
+		if entry.FlowID != "abc123" {
+			t.Errorf("FlowID = %s, want abc123", entry.FlowID)
+		}
+
+		if entry.Hostname != "node-01" {
+			t.Errorf("Hostname = %s, want node-01", entry.Hostname)
+		}
+
+		if entry.Src != "eth0" {
+			t.Errorf("Src = %s, want eth0", entry.Src)
+		}
+
+		if entry.Dst != "eth1" {
+			t.Errorf("Dst = %s, want eth1", entry.Dst)
 		}
 	})
 

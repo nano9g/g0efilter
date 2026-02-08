@@ -18,10 +18,10 @@ func Serve53(ctx context.Context, allowlist []string, opts Options) error {
 		opts.ListenAddr = ":53"
 	}
 
-	handler := createDNSHandler(allowlist, opts)
+	handler := createDNSHandler(NormalizePatterns(allowlist), opts)
 	udpSrv, tcpSrv := setupDNSServers(opts.ListenAddr, handler)
 
-	return runDNSServers(ctx, udpSrv, tcpSrv, opts)
+	return runDNSServers(ctx, udpSrv, tcpSrv, handler.upstreams, opts)
 }
 
 // createDNSHandler creates a DNS handler with the given allowlist and options.
@@ -47,9 +47,13 @@ func setupDNSServers(listenAddr string, handler *dnsHandler) (*dns.Server, *dns.
 }
 
 // runDNSServers starts both UDP and TCP DNS servers and manages their lifecycle until context is done.
-func runDNSServers(ctx context.Context, udpSrv, tcpSrv *dns.Server, opts Options) error {
+func runDNSServers(
+	ctx context.Context,
+	udpSrv, tcpSrv *dns.Server,
+	upstreams []string,
+	opts Options,
+) error {
 	if opts.Logger != nil {
-		upstreams := defaultUpstreamsFromEnv()
 		opts.Logger.Info("dns.listen",
 			"udp", opts.ListenAddr,
 			"tcp", opts.ListenAddr,
@@ -269,7 +273,6 @@ func (handler *dnsHandler) handleBlockedEnforcedType(
 ) {
 	if lg != nil {
 		lg.Info("dns.blocked",
-			"time", time.Now().UTC().Format(time.RFC3339Nano),
 			"component", "dns",
 			"action", "BLOCKED",
 			"qname", qname,
@@ -295,8 +298,6 @@ func (handler *dnsHandler) handleBlockedEnforcedType(
 			Hdr:  dns.RR_Header{Name: request.Question[0].Name, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: defaultTTL},
 			AAAA: net.IPv6zero,
 		})
-	default:
-		message.Rcode = dns.RcodeNameError
 	}
 
 	_ = writer.WriteMsg(message)
@@ -315,7 +316,6 @@ func (handler *dnsHandler) handleBlockedNonEnforcedType(
 ) {
 	if lg != nil {
 		lg.Info("dns.blocked",
-			"time", time.Now().UTC().Format(time.RFC3339Nano),
 			"component", "dns",
 			"action", "BLOCKED",
 			"qname", qname,
@@ -362,7 +362,6 @@ func (handler *dnsHandler) handleAllowedRequest(
 
 	if lg != nil {
 		lg.Info("dns.allowed",
-			"time", time.Now().UTC().Format(time.RFC3339Nano),
 			"component", "dns",
 			"action", "ALLOWED",
 			"qname", qname,
@@ -423,15 +422,6 @@ func (handler *dnsHandler) forward(request *dns.Msg) (*dns.Msg, error) {
 // markedDialer creates a network dialer with SO_MARK set to bypass iptables rules.
 func (handler *dnsHandler) markedDialer() *net.Dialer {
 	return newMarkedDialer(handler.timeout)
-}
-
-// durOrDefault returns the duration if positive, otherwise returns the default value.
-func durOrDefault(d, def time.Duration) time.Duration {
-	if d <= 0 {
-		return def
-	}
-
-	return d
 }
 
 // defaultUpstreamsFromEnv reads DNS upstream servers from DNS_UPSTREAMS environment variable or returns default.

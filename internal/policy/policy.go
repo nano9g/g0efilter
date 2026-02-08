@@ -19,7 +19,6 @@ import (
 var (
 	errInvalidIP               = errors.New("invalid IP address")
 	errInvalidDomain           = errors.New("invalid domain pattern")
-	errInvalidFilePath         = errors.New("invalid file path")
 	errPathTraversalNotAllowed = errors.New("path traversal not allowed")
 	errNotRegularFile          = errors.New("not a regular file")
 	errUnknownAllowlistField   = errors.New("unknown allowlist field")
@@ -215,11 +214,7 @@ func loadConfig(file string) (Config, error) {
 
 	// Validate file path to prevent directory traversal
 	cleanPath := filepath.Clean(file)
-	if cleanPath != file {
-		return cfg, fmt.Errorf("%w: %s", errInvalidFilePath, file)
-	}
 
-	// Check for path traversal attempts
 	if strings.Contains(cleanPath, "..") {
 		return cfg, fmt.Errorf("%w: %s", errPathTraversalNotAllowed, file)
 	}
@@ -252,46 +247,44 @@ func loadConfig(file string) (Config, error) {
 func ReadPolicy(file string) ([]string, []string, error) {
 	lg := slog.Default()
 
-	logDebug := func(msg string, args ...any) {
-		if lg != nil {
-			lg.Debug(msg, args...)
-		}
-	}
-
 	// Try to load from environment variables first
 	envIPs := strings.TrimSpace(os.Getenv("ALLOWLIST_IPS"))
 	envDomains := strings.TrimSpace(os.Getenv("ALLOWLIST_DOMAINS"))
 
 	if envIPs != "" || envDomains != "" {
-		logDebug("policy.read_start", "component", "policy", "source", "environment")
+		lg.Debug("policy.read_start", "component", "policy", "source", "environment")
 
 		return loadFromEnv(lg, envIPs, envDomains)
 	}
 
 	// Fall back to file-based policy
-	logDebug("policy.read_start", "component", "policy", "source", "file", "file", strings.TrimSpace(file))
+	lg.Debug("policy.read_start", "component", "policy", "source", "file", "file", strings.TrimSpace(file))
 
 	cfg, err := loadConfig(file)
 	if err != nil {
-		// The caller (main) is responsible for logging the top-level error.
-		// We no longer log it here to avoid redundancy.
 		return nil, nil, err
 	}
 
 	cleanIPs, err := validateIPs(lg, file, cfg.AllowList.IPs)
 	if err != nil {
-		// validateIPs already logged the specific validation error,
-		// so we just return the error up the stack.
 		return nil, nil, err
 	}
 
 	cleanDomains, err := validateDomains(lg, file, cfg.AllowList.Domains)
 	if err != nil {
-		// validateDomains also logs the specific error at the source.
 		return nil, nil, err
 	}
 
-	logDebug("policy.read_ok",
+	// Return nil for empty slices to match env-based behavior
+	if len(cleanIPs) == 0 {
+		cleanIPs = nil
+	}
+
+	if len(cleanDomains) == 0 {
+		cleanDomains = nil
+	}
+
+	lg.Debug("policy.read_ok",
 		"component", "policy",
 		"source", "file",
 		"file", file,
@@ -332,14 +325,12 @@ func loadFromEnv(lg *slog.Logger, envIPs, envDomains string) ([]string, []string
 		cleanDomains = nil
 	}
 
-	if lg != nil {
-		lg.Debug("policy.read_ok",
-			"component", "policy",
-			"source", "environment",
-			"ip_count", len(cleanIPs),
-			"domain_count", len(cleanDomains),
-		)
-	}
+	lg.Debug("policy.read_ok",
+		"component", "policy",
+		"source", "environment",
+		"ip_count", len(cleanIPs),
+		"domain_count", len(cleanDomains),
+	)
 
 	return cleanIPs, cleanDomains, nil
 }
@@ -375,23 +366,18 @@ func validateIPs(lg *slog.Logger, file string, ips []string) ([]string, error) {
 
 		err := validateIP(ip)
 		if err != nil {
-			if lg != nil {
-				errStr := err.Error()
-				lg.Error("policy.validation_error",
-					"component", "policy",
-					"file", file,
-					"field", "ip",
-					"value", ip,
-					"err", errStr,
-				)
-			}
+			lg.Error("policy.validation_error",
+				"component", "policy",
+				"file", file,
+				"field", "ip",
+				"value", ip,
+				"err", err,
+			)
 
 			return nil, fmt.Errorf("IP validation failed: %w", err)
 		}
 
-		if lg != nil {
-			lg.Debug("policy.ip_validated", "ip", ip)
-		}
+		lg.Debug("policy.ip_validated", "ip", ip)
 
 		cleanIPs = append(cleanIPs, ip)
 	}
@@ -411,23 +397,18 @@ func validateDomains(lg *slog.Logger, file string, domains []string) ([]string, 
 
 		err := validateDomain(dom)
 		if err != nil {
-			if lg != nil {
-				errStr := err.Error()
-				lg.Error("policy.validation_error",
-					"component", "policy",
-					"file", file,
-					"field", "domain",
-					"value", dom,
-					"err", errStr,
-				)
-			}
+			lg.Error("policy.validation_error",
+				"component", "policy",
+				"file", file,
+				"field", "domain",
+				"value", dom,
+				"err", err,
+			)
 
 			return nil, fmt.Errorf("domain validation failed: %w", err)
 		}
 
-		if lg != nil {
-			lg.Debug("policy.domain_validated", "domain", dom)
-		}
+		lg.Debug("policy.domain_validated", "domain", dom)
 
 		cleanDomains = append(cleanDomains, dom)
 	}

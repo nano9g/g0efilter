@@ -136,7 +136,7 @@ func TestBuildConfigDefaults(t *testing.T) {
 		WriteTimeout: 0,
 	}
 
-	got := buildConfig("1.2.3", "2026-01-01", "abc1234")
+	got := buildConfig("1.2.3")
 	compareDashboardConfig(t, got, want)
 }
 
@@ -162,7 +162,7 @@ func TestBuildConfigCustomValues(t *testing.T) {
 		WriteTimeout: 0,
 	}
 
-	got := buildConfig("1.2.3", "2026-01-01", "abc1234")
+	got := buildConfig("1.2.3")
 	compareDashboardConfig(t, got, want)
 }
 

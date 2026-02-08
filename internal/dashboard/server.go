@@ -44,7 +44,6 @@ type Server struct {
 	readLimit    int
 	sseRetry     time.Duration
 	rateLimiter  RateLimiter // Interface instead of concrete *rateLimiter
-	adminLimiter RateLimiter
 }
 
 /* =========================
@@ -178,7 +177,6 @@ func newServer(lg *slog.Logger, cfg Config) *Server {
 		readLimit:    cfg.ReadLimit,
 		sseRetry:     time.Duration(cfg.SERetryMs) * time.Millisecond,
 		rateLimiter:  newRateLimiter(cfg.RateRPS, cfg.RateBurst),
-		adminLimiter: newRateLimiter(1.0, 5.0),
 	}
 }
 

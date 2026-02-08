@@ -41,17 +41,19 @@ type UnblockStore interface {
 
 // memUnblockStore is an in-memory implementation of UnblockStore.
 type memUnblockStore struct {
-	mu        sync.RWMutex
-	requests  map[string]UnblockRequest
-	completed []CompletedUnblock
-	counter   int64
+	mu         sync.RWMutex
+	requests   map[string]UnblockRequest
+	completed  []CompletedUnblock
+	counter    int64
+	maxPending int
 }
 
 // newUnblockStore creates a new in-memory unblock store.
 func newUnblockStore() *memUnblockStore {
 	return &memUnblockStore{
-		requests:  make(map[string]UnblockRequest),
-		completed: make([]CompletedUnblock, 0),
+		requests:   make(map[string]UnblockRequest),
+		completed:  make([]CompletedUnblock, 0),
+		maxPending: 1000,
 	}
 }
 
@@ -65,6 +67,11 @@ func (s *memUnblockStore) Add(reqType, value, targetHostname string) string {
 		if req.Type == reqType && req.Value == value && req.TargetHostname == targetHostname {
 			return req.ID // Return existing request ID
 		}
+	}
+
+	// Reject if at capacity
+	if len(s.requests) >= s.maxPending {
+		return ""
 	}
 
 	s.counter++
