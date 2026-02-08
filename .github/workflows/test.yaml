@@ -35,6 +35,7 @@ jobs:
         env:
           FILTER_MODE: ${{ matrix.filter_mode }}
         run: |
+          chmod 666 policy.yaml
           docker compose -f docker-compose-build.yaml up -d \
             g0efilter g0efilter-dashboard tester
 
