@@ -1,5 +1,5 @@
 ---
-name: g0efilter Network Tests
+name: g0efilter Tests
 
 on:
   workflow_dispatch:
@@ -35,145 +35,261 @@ jobs:
         env:
           FILTER_MODE: ${{ matrix.filter_mode }}
         run: |
-          docker compose -f docker-compose-build.yaml up -d g0efilter tester
+          docker compose -f docker-compose-build.yaml up -d \
+            g0efilter g0efilter-dashboard tester
 
-      - name: Wait for g0efilter to be ready
+      - name: Wait for services to be ready
         working-directory: examples/build
         run: |
+          COMPOSE="docker compose -f docker-compose-build.yaml"
+
+          echo "Waiting for g0efilter to be ready..."
           sleep 5
 
-      - name: Run network policy tests (${{ matrix.filter_mode }} mode)
+          echo "Waiting for dashboard health endpoint..."
+          for i in $(seq 1 30); do
+            if $COMPOSE exec tester sh -lc \
+              "curl -sf http://localhost:8081/health" >/dev/null 2>&1; then
+              echo "Dashboard is ready (attempt $i)"
+              break
+            fi
+            if [ "$i" -eq 30 ]; then
+              echo "ERROR: Dashboard did not become healthy in 30s"
+              $COMPOSE logs g0efilter-dashboard
+              exit 1
+            fi
+            sleep 1
+          done
+
+      - name: "Phase 1: Baseline filtering (${{ matrix.filter_mode }} mode)"
         working-directory: examples/build
         run: |
           set -e
           COMPOSE="docker compose -f docker-compose-build.yaml"
           FILTER_MODE="${{ matrix.filter_mode }}"
 
+          echo "=== Baseline policy: github.com + 1.1.1.1 allowed ==="
+
           echo "[Domain] https://github.com should SUCCEED"
-          if ! $COMPOSE exec tester sh -lc "curl -sS --max-time 10 https://github.com -o /dev/null"; then
-            echo "ERROR: https://github.com was blocked but should be allowed"
-            exit 1
-          else
-            echo "OK: https://github.com allowed"
-          fi
+          $COMPOSE exec tester sh -lc "curl -sS --max-time 10 https://github.com -o /dev/null" \
+            || { echo "ERROR: github.com was blocked"; exit 1; }
+          echo "OK: https://github.com allowed"
 
           echo "[Domain] http://github.com should SUCCEED"
-          if ! $COMPOSE exec tester sh -lc "curl -sS --max-time 10 http://github.com -o /dev/null"; then
-            echo "ERROR: http://github.com was blocked but should be allowed"
-            exit 1
-          else
-            echo "OK: http://github.com allowed"
-          fi
+          $COMPOSE exec tester sh -lc "curl -sS --max-time 10 http://github.com -o /dev/null" \
+            || { echo "ERROR: http://github.com was blocked"; exit 1; }
+          echo "OK: http://github.com allowed"
 
-          # IP tests only apply to HTTPS mode (IPs bypass DNS filtering)
           if [ "$FILTER_MODE" = "https" ]; then
-            echo "[IP] https://1.1.1.1 should SUCCEED (IP allowlist)"
-            if ! $COMPOSE exec tester sh -lc "curl -sS --max-time 10 https://1.1.1.1 -o /dev/null"; then
-              echo "ERROR: https://1.1.1.1 was blocked but should be allowed"
-              exit 1
-            else
-              echo "OK: https://1.1.1.1 allowed"
-            fi
+            echo "[IP] https://1.1.1.1 should SUCCEED"
+            $COMPOSE exec tester sh -lc "curl -sS --max-time 10 https://1.1.1.1 -o /dev/null" \
+              || { echo "ERROR: 1.1.1.1 was blocked"; exit 1; }
+            echo "OK: https://1.1.1.1 allowed"
 
-            echo "[IP] http://1.1.1.1 should SUCCEED (IP allowlist)"
-            if ! $COMPOSE exec tester sh -lc "curl -sS --max-time 10 http://1.1.1.1 -o /dev/null"; then
-              echo "ERROR: http://1.1.1.1 was blocked but should be allowed"
-              exit 1
-            else
-              echo "OK: http://1.1.1.1 allowed"
-            fi
+            echo "[IP] http://1.1.1.1 should SUCCEED"
+            $COMPOSE exec tester sh -lc "curl -sS --max-time 10 http://1.1.1.1 -o /dev/null" \
+              || { echo "ERROR: http://1.1.1.1 was blocked"; exit 1; }
+            echo "OK: http://1.1.1.1 allowed"
           else
             echo "[IP] Skipping IP tests in DNS mode (IPs bypass DNS filtering)"
           fi
 
           echo "[Domain] https://google.com should FAIL"
-          if $COMPOSE exec tester sh -lc "curl -sS --max-time 5 https://google.com -o /dev/null"; then
-            echo "ERROR: https://google.com succeeded but should be blocked"
-            exit 1
-          else
-            echo "OK: https://google.com blocked"
-          fi
+          ! $COMPOSE exec tester sh -lc "curl -sS --max-time 5 https://google.com -o /dev/null" \
+            || { echo "ERROR: google.com was allowed but should be blocked"; exit 1; }
+          echo "OK: https://google.com blocked"
 
           echo "[Domain] http://google.com should FAIL"
-          if $COMPOSE exec tester sh -lc "curl -sS --max-time 5 http://google.com -o /dev/null"; then
-            echo "ERROR: http://google.com succeeded but should be blocked"
-            exit 1
-          else
-            echo "OK: http://google.com blocked"
-          fi
+          ! $COMPOSE exec tester sh -lc "curl -sS --max-time 5 http://google.com -o /dev/null" \
+            || { echo "ERROR: http://google.com was allowed but should be blocked"; exit 1; }
+          echo "OK: http://google.com blocked"
 
-          # Only test blocked IPs in HTTPS mode
           if [ "$FILTER_MODE" = "https" ]; then
             echo "[IP] https://1.0.0.1 should FAIL"
-            if $COMPOSE exec tester sh -lc "curl -sS --max-time 5 https://1.0.0.1 -o /dev/null"; then
-              echo "ERROR: https://1.0.0.1 succeeded but should be blocked"
-              exit 1
-            else
-              echo "OK: https://1.0.0.1 blocked"
-            fi
+            ! $COMPOSE exec tester sh -lc "curl -sS --max-time 5 https://1.0.0.1 -o /dev/null" \
+              || { echo "ERROR: 1.0.0.1 was allowed but should be blocked"; exit 1; }
+            echo "OK: https://1.0.0.1 blocked"
 
             echo "[IP] http://1.0.0.1 should FAIL"
-            if $COMPOSE exec tester sh -lc "curl -sS --max-time 5 http://1.0.0.1 -o /dev/null"; then
-              echo "ERROR: http://1.0.0.1 succeeded but should be blocked"
-              exit 1
-            else
-              echo "OK: http://1.0.0.1 blocked"
-            fi
+            ! $COMPOSE exec tester sh -lc "curl -sS --max-time 5 http://1.0.0.1 -o /dev/null" \
+              || { echo "ERROR: http://1.0.0.1 was allowed but should be blocked"; exit 1; }
+            echo "OK: http://1.0.0.1 blocked"
           else
             echo "[IP] Skipping blocked IP tests in DNS mode"
           fi
 
-          echo "=== Testing live policy reload ==="
-          echo "Updating policy.yaml to allowlist google.com and 1.0.0.1..."
-          cat > policy.yaml <<'EOF'
-          allowlist:
-            ips:
-              - "1.1.1.1"
-              - "192.168.0.0/16"
-              - "10.1.1.1"
-              - "1.0.0.1"
-            domains:
-              - "github.com"
-              - "google.com"
-              - "*.alpinelinux.org"
-          EOF
+      - name: "Phase 2: Remote unblock → policy reload (${{ matrix.filter_mode }} mode)"
+        working-directory: examples/build
+        run: |
+          set -e
+          COMPOSE="docker compose -f docker-compose-build.yaml"
+          API="http://localhost:8081/api/v1"
+          API_KEY="your-secure-api-key-here"
+          FILTER_MODE="${{ matrix.filter_mode }}"
 
-          echo "Waiting 10 seconds for g0efilter to detect and apply changes..."
-          sleep 10
+          run_curl() {
+            $COMPOSE exec tester sh -lc "$1"
+          }
 
-          echo "[Domain] https://google.com should now SUCCEED (after reload)"
-          if ! $COMPOSE exec tester sh -lc "curl -sS --max-time 10 https://google.com -o /dev/null"; then
-            echo "ERROR: https://google.com was blocked but should be allowed after reload"
-            exit 1
-          else
-            echo "OK: https://google.com allowed after reload"
-          fi
+          echo "=== Remote unblock: google.com ==="
 
-          echo "[Domain] http://google.com should now SUCCEED (after reload)"
-          if ! $COMPOSE exec tester sh -lc "curl -sS --max-time 10 http://google.com -o /dev/null"; then
-            echo "ERROR: http://google.com was blocked but should be allowed after reload"
-            exit 1
-          else
-            echo "OK: http://google.com allowed after reload"
-          fi
+          # ── Create unblock request via dashboard ──────────
+          echo "[Unblock] Create request for google.com"
+          CREATE=$(run_curl "curl -sf -X POST $API/unblocks \
+            -H 'Content-Type: application/json' \
+            -d '{\"type\":\"domain\",\"value\":\"google.com\"}'")
+          echo "$CREATE" | grep -q '"status":"pending"' \
+            || { echo "ERROR: create failed: $CREATE"; exit 1; }
+          ID=$(echo "$CREATE" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+          [ -n "$ID" ] || { echo "ERROR: no id returned"; exit 1; }
+          echo "OK: created id=$ID"
 
-          # Only test IP reloads in HTTPS mode
-          if [ "$FILTER_MODE" = "https" ]; then
-            echo "[IP] https://1.0.0.1 should now SUCCEED (after reload)"
-            if ! $COMPOSE exec tester sh -lc "curl -sS --max-time 10 https://1.0.0.1 -o /dev/null"; then
-              echo "ERROR: https://1.0.0.1 was blocked but should be allowed after reload"
-              exit 1
-            else
-              echo "OK: https://1.0.0.1 allowed after reload"
+          echo "[Unblock] Status shows pending"
+          STATUS=$(run_curl "curl -sf $API/unblocks/status")
+          echo "$STATUS" | grep -q '"google.com"' \
+            || { echo "ERROR: google.com not in status"; exit 1; }
+          echo "$STATUS" | grep -q '"status":"pending"' \
+            || { echo "ERROR: not marked pending"; exit 1; }
+          echo "OK: status=pending"
+
+          # ── Wait for g0efilter to poll, apply, and ack ────
+          echo "[Unblock] Waiting for g0efilter to poll and apply unblock..."
+          # Poll interval is 5s, policy watcher is 5s, so ~15s worst case
+          for i in $(seq 1 12); do
+            STATUS_NOW=$(run_curl "curl -sf $API/unblocks/status")
+            if echo "$STATUS_NOW" | grep -q '"status":"completed"'; then
+              echo "OK: g0efilter processed unblock (attempt $i)"
+              break
             fi
-
-            echo "[IP] http://1.0.0.1 should now SUCCEED (after reload)"
-            if ! $COMPOSE exec tester sh -lc "curl -sS --max-time 10 http://1.0.0.1 -o /dev/null"; then
-              echo "ERROR: http://1.0.0.1 was blocked but should be allowed after reload"
+            if [ "$i" -eq 12 ]; then
+              echo "ERROR: unblock not completed after 60s"
+              echo "Status: $STATUS_NOW"
+              # Show policy file to debug
+              echo "Policy file:"
+              cat policy.yaml
               exit 1
-            else
-              echo "OK: http://1.0.0.1 allowed after reload"
             fi
-          else
-            echo "[IP] Skipping IP reload tests in DNS mode"
-          fi
+            sleep 5
+          done
+
+          # ── Verify policy file was updated ────────────────
+          echo "[Unblock] Verify google.com added to policy.yaml"
+          grep -q 'google.com' policy.yaml \
+            || { echo "ERROR: google.com not in policy.yaml"; cat policy.yaml; exit 1; }
+          echo "OK: google.com found in policy.yaml"
+
+          # ── Verify pending list is empty ──────────────────
+          echo "[Unblock] Verify pending list is empty"
+          PENDING=$(run_curl "curl -sf -H 'X-API-Key: $API_KEY' $API/unblocks")
+          PENDING_COUNT=$(echo "$PENDING" | grep -o '"status":"pending"' | wc -l)
+          [ "$PENDING_COUNT" -eq 0 ] \
+            || { echo "ERROR: $PENDING_COUNT items still pending"; exit 1; }
+          echo "OK: pending list empty"
+
+          # ── Verify google.com is now reachable ────────────
+          echo "[Filter] Waiting for policy reload..."
+          sleep 5
+
+          echo "[Filter] https://google.com should now SUCCEED"
+          $COMPOSE exec tester sh -lc "curl -sS --max-time 10 https://google.com -o /dev/null" \
+            || { echo "ERROR: google.com still blocked after unblock"; exit 1; }
+          echo "OK: https://google.com allowed after remote unblock"
+
+          echo "[Filter] http://google.com should now SUCCEED"
+          $COMPOSE exec tester sh -lc "curl -sS --max-time 10 http://google.com -o /dev/null" \
+            || { echo "ERROR: http://google.com still blocked after unblock"; exit 1; }
+          echo "OK: http://google.com allowed after remote unblock"
+
+          # ── Unblock API validation tests ─────────────────
+          echo "[Unblock] Invalid type → 400"
+          CODE=$(run_curl "curl -s -o /dev/null -w '%{http_code}' -X POST $API/unblocks \
+            -H 'Content-Type: application/json' \
+            -d '{\"type\":\"badtype\",\"value\":\"example.com\"}'")
+          [ "$CODE" = "400" ] || { echo "ERROR: got $CODE"; exit 1; }
+          echo "OK"
+
+          echo "[Unblock] Invalid IP → 400"
+          CODE=$(run_curl "curl -s -o /dev/null -w '%{http_code}' -X POST $API/unblocks \
+            -H 'Content-Type: application/json' \
+            -d '{\"type\":\"ip\",\"value\":\"not-an-ip\"}'")
+          [ "$CODE" = "400" ] || { echo "ERROR: got $CODE"; exit 1; }
+          echo "OK"
+
+          echo "[Unblock] Unknown ack ID → 404"
+          CODE=$(run_curl "curl -s -o /dev/null -w '%{http_code}' -X POST \
+            -H 'Content-Type: application/json' \
+            -H 'X-API-Key: $API_KEY' \
+            $API/unblocks/ack \
+            -d '{\"id\":\"nonexistent-id\"}'")
+          [ "$CODE" = "404" ] || { echo "ERROR: got $CODE"; exit 1; }
+          echo "OK"
+
+          echo "[Unblock] Unauthenticated poll → 401"
+          CODE=$(run_curl "curl -s -o /dev/null -w '%{http_code}' $API/unblocks")
+          [ "$CODE" = "401" ] || { echo "ERROR: got $CODE"; exit 1; }
+          echo "OK"
+
+      - name: "Phase 3: Dashboard log verification"
+        working-directory: examples/build
+        run: |
+          set -e
+          COMPOSE="docker compose -f docker-compose-build.yaml"
+          API="http://localhost:8081/api/v1"
+
+          run_curl() {
+            $COMPOSE exec tester sh -lc "$1"
+          }
+
+          echo "Waiting for log shipping to complete..."
+          sleep 5
+
+          echo "=== Dashboard log verification ==="
+
+          echo "[Logs] Retrieve all entries"
+          LOGS=$(run_curl "curl -sf $API/logs?limit=500")
+          TOTAL=$(echo "$LOGS" | grep -o '"id"' | wc -l)
+          [ "$TOTAL" -gt 0 ] \
+            || { echo "ERROR: dashboard has 0 logs"; exit 1; }
+          echo "OK: $TOTAL log entries shipped"
+
+          echo "[Logs] github.com traffic logged as ALLOWED"
+          GITHUB=$(run_curl "curl -sf '$API/logs?q=github.com&limit=100'")
+          echo "$GITHUB" | grep -q '"github.com"' \
+            || { echo "ERROR: no github.com entries"; exit 1; }
+          echo "$GITHUB" | grep -q '"ALLOWED"' \
+            || { echo "ERROR: github.com not marked ALLOWED"; exit 1; }
+          echo "OK: github.com logged as ALLOWED"
+
+          echo "[Logs] google.com traffic logged as BLOCKED"
+          GOOGLE=$(run_curl "curl -sf '$API/logs?q=google.com&limit=100'")
+          echo "$GOOGLE" | grep -q '"google.com"' \
+            || { echo "ERROR: no google.com entries"; exit 1; }
+          echo "$GOOGLE" | grep -q '"BLOCKED"' \
+            || { echo "ERROR: google.com not marked BLOCKED"; exit 1; }
+          echo "OK: google.com logged as BLOCKED"
+
+          echo "[Logs] Payload fields on a log entry"
+          echo "$LOGS" | grep -q '"action"' \
+            || { echo "ERROR: missing action"; exit 1; }
+          echo "$LOGS" | grep -q '"source_ip"' \
+            || { echo "ERROR: missing source_ip"; exit 1; }
+          echo "$LOGS" | grep -q '"hostname":"host-01"' \
+            || { echo "ERROR: wrong hostname"; exit 1; }
+          echo "$LOGS" | grep -q '"flow_id"' \
+            || { echo "ERROR: missing flow_id"; exit 1; }
+          echo "$LOGS" | grep -q '"protocol"' \
+            || { echo "ERROR: missing protocol"; exit 1; }
+          echo "OK: action, source_ip, hostname, flow_id, protocol present"
+
+      - name: Show logs on failure
+        if: failure()
+        working-directory: examples/build
+        run: |
+          docker compose -f docker-compose-build.yaml logs g0efilter
+          docker compose -f docker-compose-build.yaml logs g0efilter-dashboard
+
+      - name: Tear down
+        if: always()
+        working-directory: examples/build
+        run: |
+          docker compose -f docker-compose-build.yaml down -v --remove-orphans

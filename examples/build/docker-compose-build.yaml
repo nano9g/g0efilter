@@ -5,7 +5,7 @@ services:
       dockerfile: examples/build/Dockerfile
     container_name: g0efilter
     volumes:
-      - ./policy.yaml:/app/policy.yaml:ro
+      - ./policy.yaml:/app/policy.yaml
     cap_drop:
       - ALL
     security_opt:
