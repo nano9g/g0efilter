@@ -1,5 +1,5 @@
 # Stage 1: Build
-FROM dhi.io/golang:1-alpine3.23 AS builder
+FROM golang:1.25.7-alpine3.23 AS builder
 
 ARG VERSION=dev
 ARG COMMIT=unknown
@@ -18,7 +18,7 @@ RUN go build -trimpath \
     -o /build/g0efilter ./cmd/g0efilter
 
 # Stage 2: Runtime
-FROM dhi.io/alpine-base:3.23-alpine3.23-dev
+FROM alpine:3.23.3
 
 RUN apk add --no-cache nftables ca-certificates \
     && update-ca-certificates
