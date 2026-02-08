@@ -10,7 +10,6 @@ services:
       - ALL
     security_opt:
       - no-new-privileges
-    read_only: true
     env_file:
       - ../.env
     environment:

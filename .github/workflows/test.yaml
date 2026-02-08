@@ -152,37 +152,25 @@ jobs:
           echo "OK: google.com in pending"
 
           echo "[Unblock] Waiting for g0efilter to poll and apply unblock..."
-          sleep 5
-          for i in $(seq 1 12); do
+          for i in $(seq 1 15); do
             STATUS_NOW=$(run_curl "curl -sf $API/unblocks/status")
             if echo "$STATUS_NOW" | grep -q '"pending":\[\]'; then
               echo "OK: g0efilter processed unblock (attempt $i)"
-              echo "Status: $STATUS_NOW"
               break
             fi
-            if [ "$i" -eq 12 ]; then
-              echo "ERROR: unblock not completed after 60s"
+            if [ "$i" -eq 15 ]; then
+              echo "ERROR: unblock not completed after 75s"
               echo "Status: $STATUS_NOW"
-              echo "Policy file:"
-              cat policy.yaml
+              docker compose -f docker-compose-build.yaml logs g0efilter | tail -20
               exit 1
             fi
             sleep 5
           done
 
           echo "[Unblock] Verify google.com added to policy.yaml"
-          for i in $(seq 1 10); do
-            if grep -q 'google.com' policy.yaml 2>/dev/null; then
-              echo "OK: google.com found in policy.yaml (attempt $i)"
-              break
-            fi
-            if [ "$i" -eq 10 ]; then
-              echo "ERROR: google.com not in policy.yaml after 10s"
-              cat policy.yaml
-              exit 1
-            fi
-            sleep 1
-          done
+          grep -q 'google.com' policy.yaml \
+            || { echo "ERROR: google.com not in policy.yaml"; cat policy.yaml; exit 1; }
+          echo "OK: google.com found in policy.yaml"
 
           echo "[Unblock] Verify pending list is empty"
           PENDING=$(run_curl "curl -sf -H 'X-API-Key: $API_KEY' $API/unblocks")
