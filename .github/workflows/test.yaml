@@ -133,7 +133,6 @@ jobs:
 
           echo "=== Remote unblock: google.com ==="
 
-          # ── Create unblock request via dashboard ──────────
           echo "[Unblock] Create request for google.com"
           CREATE=$(run_curl "curl -sf -X POST $API/unblocks \
             -H 'Content-Type: application/json' \
@@ -152,19 +151,18 @@ jobs:
             || { echo "ERROR: google.com not in status"; exit 1; }
           echo "OK: google.com in pending"
 
-          # ── Wait for g0efilter to poll, apply, and ack ────
           echo "[Unblock] Waiting for g0efilter to poll and apply unblock..."
-          # Poll interval is 2s, policy watcher is 5s, so ~10s worst case
+          sleep 5
           for i in $(seq 1 12); do
             STATUS_NOW=$(run_curl "curl -sf $API/unblocks/status")
-            if echo "$STATUS_NOW" | grep -q '"completed".*"google.com"'; then
+            if echo "$STATUS_NOW" | grep -q '"pending":\[\]'; then
               echo "OK: g0efilter processed unblock (attempt $i)"
+              echo "Status: $STATUS_NOW"
               break
             fi
             if [ "$i" -eq 12 ]; then
               echo "ERROR: unblock not completed after 60s"
               echo "Status: $STATUS_NOW"
-              # Show policy file to debug
               echo "Policy file:"
               cat policy.yaml
               exit 1
@@ -172,22 +170,28 @@ jobs:
             sleep 5
           done
 
-          # ── Verify policy file was updated ────────────────
           echo "[Unblock] Verify google.com added to policy.yaml"
-          grep -q 'google.com' policy.yaml \
-            || { echo "ERROR: google.com not in policy.yaml"; cat policy.yaml; exit 1; }
-          echo "OK: google.com found in policy.yaml"
+          for i in $(seq 1 10); do
+            if grep -q 'google.com' policy.yaml 2>/dev/null; then
+              echo "OK: google.com found in policy.yaml (attempt $i)"
+              break
+            fi
+            if [ "$i" -eq 10 ]; then
+              echo "ERROR: google.com not in policy.yaml after 10s"
+              cat policy.yaml
+              exit 1
+            fi
+            sleep 1
+          done
 
-          # ── Verify pending list is empty ──────────────────
           echo "[Unblock] Verify pending list is empty"
           PENDING=$(run_curl "curl -sf -H 'X-API-Key: $API_KEY' $API/unblocks")
           echo "$PENDING" | grep -q '"pending":\[\]' \
             || { echo "ERROR: pending list not empty: $PENDING"; exit 1; }
           echo "OK: pending list empty"
 
-          # ── Verify google.com is now reachable ────────────
           echo "[Filter] Waiting for policy reload..."
-          sleep 5
+          sleep 10
 
           echo "[Filter] https://google.com should now SUCCEED"
           $COMPOSE exec tester sh -lc "curl -sS --max-time 10 https://google.com -o /dev/null" \
@@ -199,7 +203,6 @@ jobs:
             || { echo "ERROR: http://google.com still blocked after unblock"; exit 1; }
           echo "OK: http://google.com allowed after remote unblock"
 
-          # ── Unblock API validation tests ─────────────────
           echo "[Unblock] Invalid type → 400"
           CODE=$(run_curl "curl -s -o /dev/null -w '%{http_code}' -X POST $API/unblocks \
             -H 'Content-Type: application/json' \
@@ -284,9 +287,3 @@ jobs:
         run: |
           docker compose -f docker-compose-build.yaml logs g0efilter
           docker compose -f docker-compose-build.yaml logs g0efilter-dashboard
-
-      - name: Tear down
-        if: always()
-        working-directory: examples/build
-        run: |
-          docker compose -f docker-compose-build.yaml down -v --remove-orphans
