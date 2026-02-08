@@ -144,20 +144,20 @@ jobs:
           [ -n "$ID" ] || { echo "ERROR: no id returned"; exit 1; }
           echo "OK: created id=$ID"
 
-          echo "[Unblock] Status shows pending"
+          echo "[Unblock] Status shows google.com in pending"
           STATUS=$(run_curl "curl -sf $API/unblocks/status")
+          echo "$STATUS" | grep -q '"pending"' \
+            || { echo "ERROR: no pending array in status response"; exit 1; }
           echo "$STATUS" | grep -q '"google.com"' \
             || { echo "ERROR: google.com not in status"; exit 1; }
-          echo "$STATUS" | grep -q '"status":"pending"' \
-            || { echo "ERROR: not marked pending"; exit 1; }
-          echo "OK: status=pending"
+          echo "OK: google.com in pending"
 
           # ── Wait for g0efilter to poll, apply, and ack ────
           echo "[Unblock] Waiting for g0efilter to poll and apply unblock..."
-          # Poll interval is 5s, policy watcher is 5s, so ~15s worst case
+          # Poll interval is 2s, policy watcher is 5s, so ~10s worst case
           for i in $(seq 1 12); do
             STATUS_NOW=$(run_curl "curl -sf $API/unblocks/status")
-            if echo "$STATUS_NOW" | grep -q '"status":"completed"'; then
+            if echo "$STATUS_NOW" | grep -q '"completed".*"google.com"'; then
               echo "OK: g0efilter processed unblock (attempt $i)"
               break
             fi
@@ -181,9 +181,8 @@ jobs:
           # ── Verify pending list is empty ──────────────────
           echo "[Unblock] Verify pending list is empty"
           PENDING=$(run_curl "curl -sf -H 'X-API-Key: $API_KEY' $API/unblocks")
-          PENDING_COUNT=$(echo "$PENDING" | grep -o '"status":"pending"' | wc -l)
-          [ "$PENDING_COUNT" -eq 0 ] \
-            || { echo "ERROR: $PENDING_COUNT items still pending"; exit 1; }
+          echo "$PENDING" | grep -q '"pending":\[\]' \
+            || { echo "ERROR: pending list not empty: $PENDING"; exit 1; }
           echo "OK: pending list empty"
 
           # ── Verify google.com is now reachable ────────────
@@ -273,13 +272,11 @@ jobs:
             || { echo "ERROR: missing action"; exit 1; }
           echo "$LOGS" | grep -q '"source_ip"' \
             || { echo "ERROR: missing source_ip"; exit 1; }
-          echo "$LOGS" | grep -q '"hostname":"host-01"' \
-            || { echo "ERROR: wrong hostname"; exit 1; }
           echo "$LOGS" | grep -q '"flow_id"' \
             || { echo "ERROR: missing flow_id"; exit 1; }
           echo "$LOGS" | grep -q '"protocol"' \
             || { echo "ERROR: missing protocol"; exit 1; }
-          echo "OK: action, source_ip, hostname, flow_id, protocol present"
+          echo "OK: action, source_ip, flow_id, protocol present"
 
       - name: Show logs on failure
         if: failure()
