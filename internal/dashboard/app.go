@@ -41,7 +41,7 @@ func RunDashboard(args []string, version, date, commit string) error {
 		return nil
 	}
 
-	cfg := buildConfig(version, date, commit)
+	cfg := buildConfig(version)
 	normalizeAddr(&cfg)
 
 	lg, err := setupLogging(cfg, version, date, commit)
@@ -121,7 +121,7 @@ func printVersion(version, date, commit string) {
 		short = commit[:7]
 	}
 
-	fmt.Fprintf(os.Stderr, "%s v%s %s (%s)\n", name, version, short, date)
+	fmt.Fprintf(os.Stderr, "%s v%s %s (%s) %s\n", name, version, short, date, getGoVersion())
 	fmt.Fprintf(os.Stderr, "Copyright (C) %s %s\n", licenseYear, licenseOwner)
 	fmt.Fprintf(os.Stderr, "Licensed under the %s license\n", licenseType)
 }
@@ -163,7 +163,7 @@ func getenvFloat(k string, def float64) float64 {
 	return f
 }
 
-func buildConfig(version, _, _ string) Config {
+func buildConfig(version string) Config {
 	return Config{
 		Addr:         getenv("PORT", ":8081"),
 		APIKey:       getenv("API_KEY", ""),

@@ -104,14 +104,6 @@ type poster struct {
 	retryWaitMax time.Duration
 }
 
-type nopLogger struct{}
-
-// Printf implements a no-op logger for the HTTP client.
-func (n *nopLogger) Printf(string, ...any) {}
-
-// Println implements a no-op logger for the HTTP client.
-func (n *nopLogger) Println(...any) {}
-
 // shouldRetry determines if an HTTP request should be retried based on the response code or error.
 func shouldRetry(resp *http.Response, err error) bool {
 	if err != nil {
@@ -251,35 +243,12 @@ func (p *poster) Probe(ctx context.Context) error {
 
 	defer func() { _ = resp.Body.Close() }()
 
-	// Read a small sample for diagnostics, then drain & close to keep the connection reusable.
-	const maxProbeRead = 2 << 10 // 2KiB
-
-	lr := io.LimitReader(resp.Body, maxProbeRead)
-
-	sample, rerr := io.ReadAll(lr)
-	if rerr != nil {
-		// Log but don't fail the probe solely on sample read error.
-		p.zl.Warn().Err(rerr).Msg("http.body_read_error")
-	}
-
 	drainErr := safeio.DrainAndClose(resp.Body)
 	if drainErr != nil {
 		p.zl.Warn().Err(drainErr).Msg("http.body_close_error")
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		// Include a tiny body hint for easier debugging.
-		snip := strings.TrimSpace(string(sample))
-
-		jvalid := json.Valid(sample)
-		if jvalid {
-			return fmt.Errorf("%w %d (body=json)", errProbeStatus, resp.StatusCode)
-		}
-
-		if snip != "" {
-			return fmt.Errorf("%w %d (body=%q)", errProbeStatus, resp.StatusCode, snip)
-		}
-
 		return fmt.Errorf("%w %d", errProbeStatus, resp.StatusCode)
 	}
 
@@ -410,11 +379,15 @@ func (p *poster) handleFinalResponse(resp *http.Response, err error) bool {
 
 func logTraceBody(zl zerolog.Logger, url string, body []byte) {
 	const maxBody = 8 << 10 // 8KiB
+
+	truncated := false
+
 	if len(body) > maxBody {
-		body = append(append([]byte{}, body[:maxBody]...), []byte("...(truncated)")...)
+		body = body[:maxBody]
+		truncated = true
 	}
 
-	ev := zl.Trace().Str("url", url)
+	ev := zl.Trace().Str("url", url).Bool("truncated", truncated)
 	if json.Valid(body) {
 		ev = ev.RawJSON("body", body)
 	} else {
@@ -565,9 +538,12 @@ func (z *zerologHandler) Handle(ctx context.Context, record slog.Record) error {
 		return true
 	})
 
+	// Extract action once for all downstream consumers
+	act := extractAction(attrs)
+
 	// Adjust log level for IP-based ALLOWED events (allowlisted IPs)
 	logLevel := record.Level
-	if isAllowlistedIP(attrs) {
+	if isAllowlistedIP(act, attrs) {
 		logLevel = slog.LevelDebug
 	}
 
@@ -577,15 +553,12 @@ func (z *zerologHandler) Handle(ctx context.Context, record slog.Record) error {
 	}
 
 	// Ship action events to the dashboard if configured
-	// Only process logs that have an action attribute (BLOCKED/ALLOWED/REDIRECTED)
-	if z.poster != nil {
-		if _, hasAction := attrs["action"]; hasAction {
-			shipToDashboard(z.poster, z.hostname, z.version, record.Time, record.Message, attrs)
-		}
+	if z.poster != nil && act != "" {
+		shipToDashboard(z.poster, z.hostname, z.version, record.Time, record.Message, act, attrs)
 	}
 
 	// Alerting feature - send notifications for BLOCKED events
-	if z.notifier != nil {
+	if z.notifier != nil && act == "BLOCKED" {
 		handleBlockedAlert(ctx, z.notifier, attrs)
 	}
 
@@ -621,9 +594,7 @@ func logToTerminal(zl zerolog.Logger, level slog.Level, msg string, attrs map[st
 }
 
 // shouldShipToDashboard determines if an event should be sent to the dashboard.
-func shouldShipToDashboard(attrs map[string]any) bool {
-	act := extractAction(attrs)
-
+func shouldShipToDashboard(act string, attrs map[string]any) bool {
 	// Only ship BLOCKED and ALLOWED actions
 	// REDIRECTED stays in console logs only (debug level)
 	if act != "BLOCKED" && act != ActionAllowed {
@@ -656,57 +627,27 @@ func extractAction(attrs map[string]any) string {
 }
 
 // isAllowlistedIP checks if an event is an ALLOWED action for an allowlisted IP (from nftables).
-func isAllowlistedIP(attrs map[string]any) bool {
-	act := extractAction(attrs)
-
+func isAllowlistedIP(act string, attrs map[string]any) bool {
 	if act != ActionAllowed {
 		return false
 	}
 
-	// Check if this is an IP-based allow (component=nflog from nftables)
-	component := ""
+	// nflog component indicates IP-based allow from nftables
 	if v, ok := attrs["component"]; ok {
-		component = strings.ToLower(fmt.Sprint(v))
+		return strings.ToLower(fmt.Sprint(v)) == "nflog"
 	}
 
-	// nflog component indicates IP-based allow from nftables
-	return component == "nflog"
+	return false
 }
 
 func shipToDashboard(
-	poster *poster, hostname string, version string, rTime time.Time, rMsg string, attrs map[string]any,
+	poster *poster, hostname string, version string, rTime time.Time, rMsg string, act string, attrs map[string]any,
 ) {
-	// Extract action and component for debugging
-	act := extractAction(attrs)
-
-	comp := ""
-	if v, ok := attrs["component"]; ok {
-		comp = fmt.Sprint(v)
-	}
-
-	if !shouldShipToDashboard(attrs) {
-		// Debug: log when we skip shipping
-		if poster.debug {
-			poster.zl.Debug().
-				Str("action", act).
-				Str("component", comp).
-				Str("msg", rMsg).
-				Msg("dashboard.skip_shipping")
-		}
-
+	if !shouldShipToDashboard(act, attrs) {
 		return
 	}
 
-	// Debug: log what we're shipping
-	if poster.debug {
-		poster.zl.Debug().
-			Str("action", act).
-			Str("component", comp).
-			Str("msg", rMsg).
-			Msg("dashboard.will_ship")
-	}
-
-	payload := buildDashboardPayload(hostname, version, rTime, rMsg, extractAction(attrs), attrs)
+	payload := buildDashboardPayload(hostname, version, rTime, rMsg, act, attrs)
 
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
@@ -715,32 +656,17 @@ func shipToDashboard(
 		return
 	}
 
-	// In your dashboard logging code
 	select {
 	case poster.q <- payloadBytes:
 		// Message queued
 	default:
-		// Queue full, drop message and continue
 		poster.zl.Warn().Msg("dashboard.queue_full")
 	}
 }
 
 // handleBlockedAlert processes BLOCKED events and sends notifications.
+// The caller must ensure act == "BLOCKED" before calling.
 func handleBlockedAlert(ctx context.Context, notifier *alerting.Notifier, attrs map[string]any) {
-	if notifier == nil {
-		return
-	}
-
-	// Check if this is a BLOCKED event
-	act := ""
-	if v, ok := attrs["action"]; ok {
-		act = strings.ToUpper(fmt.Sprint(v))
-	}
-
-	if act != "BLOCKED" {
-		return
-	}
-
 	// Extract detailed connection information
 	info := alerting.BlockedConnectionInfo{
 		SourceIP:        extractStringAttr(attrs, "source_ip"),
@@ -818,16 +744,7 @@ func buildDestinationString(attrs map[string]any) string {
 }
 
 func getCanonicalTime(attrs map[string]any, fallback time.Time) string {
-	// Canonical event time (prefer producer-supplied)
 	if t, ok := attrs["time"]; ok && fmt.Sprint(t) != "" {
-		return fmt.Sprint(t)
-	}
-
-	if t, ok := attrs["timestamp"]; ok && fmt.Sprint(t) != "" {
-		return fmt.Sprint(t)
-	}
-
-	if t, ok := attrs["event_time"]; ok && fmt.Sprint(t) != "" {
 		return fmt.Sprint(t)
 	}
 
@@ -868,26 +785,28 @@ func buildDashboardPayload(
 		"time":          getCanonicalTime(attrs, rTime),
 	}
 
-	// Normalize attribute keys to canonical names
-	normalizeAttributeKeys(attrs)
+	// Clone attrs to avoid mutating the caller's map
+	norm := make(map[string]any, len(attrs))
+	maps.Copy(norm, attrs)
+	normalizeAttributeKeys(norm)
 
 	// Ensure hostname included if available
 	if hostname != "" {
-		if _, ok := attrs["hostname"]; !ok || fmt.Sprint(attrs["hostname"]) == "" {
+		if _, ok := norm["hostname"]; !ok || fmt.Sprint(norm["hostname"]) == "" {
 			payload["hostname"] = hostname
 		}
 	}
 
 	// Include client version if available
 	if version != "" {
-		if _, ok := attrs["version"]; !ok || fmt.Sprint(attrs["version"]) == "" {
+		if _, ok := norm["version"]; !ok || fmt.Sprint(norm["version"]) == "" {
 			payload["version"] = version
 		}
 	}
 
 	// Copy canonical fields if present
 	for _, key := range dashboardKeys {
-		if val, ok := attrs[key]; ok && val != nil && fmt.Sprint(val) != "" {
+		if val, ok := norm[key]; ok && val != nil && fmt.Sprint(val) != "" {
 			payload[key] = val
 		}
 	}

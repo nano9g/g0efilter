@@ -22,7 +22,7 @@ func Serve443(ctx context.Context, allowlist []string, opts Options) error {
 		opts.ListenAddr = ":8443"
 	}
 
-	return serveTCP(ctx, opts.ListenAddr, opts.Logger, handle, allowlist, opts, "https")
+	return serveTCP(ctx, opts.ListenAddr, opts.Logger, handle, NormalizePatterns(allowlist), opts, "https")
 }
 
 // handle processes an individual TLS connection for HTTPS filtering.
@@ -117,9 +117,7 @@ func extractSNIFromConnection(conn net.Conn, opts Options) (string, *bytes.Buffe
 
 // handleBlockedHTTPS handles blocked HTTPS connections.
 func handleBlockedHTTPS(conn net.Conn, tc *net.TCPConn, sni string, opts Options) {
-	if opts.Logger != nil {
-		logBlockedHTTPS(conn, tc, sni, opts)
-	}
+	logBlockedHTTPS(conn, tc, sni, opts)
 
 	if opts.DropWithRST {
 		_ = tc.SetLinger(0)
@@ -143,7 +141,7 @@ func logBlockedHTTPS(conn net.Conn, tc *net.TCPConn, sni string, opts Options) {
 	if derr == nil {
 		_ = EmitSynthetic(opts.Logger, "https", conn, tgt)
 		destIP, destPort = parseHostPort(tgt)
-	} else {
+	} else if opts.Logger != nil {
 		opts.Logger.Debug("https.orig_dst_unavailable_for_blocked",
 			"err", derr.Error(),
 			"source_ip", sourceIP,
@@ -207,11 +205,11 @@ type roConn struct{ r io.Reader }
 
 func (c roConn) Read(p []byte) (int, error) {
 	n, err := c.r.Read(p)
-	if err != nil {
-		return n, fmt.Errorf("read error: %w", err)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return n, fmt.Errorf("read: %w", err)
 	}
 
-	return n, nil
+	return n, err //nolint:wrapcheck // io.EOF must pass through unwrapped for TLS handshake
 }
 
 func (c roConn) Write([]byte) (int, error)        { return 0, io.ErrClosedPipe }

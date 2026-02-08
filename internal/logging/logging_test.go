@@ -167,16 +167,6 @@ func getToZerologLevelTests() []struct {
 	}
 }
 
-func TestNopLogger(t *testing.T) {
-	t.Parallel()
-
-	logger := &nopLogger{}
-
-	// These should not panic or produce output
-	logger.Printf("test %s", "message")
-	logger.Println("test", "message")
-}
-
 //nolint:paralleltest // Cannot use t.Parallel() because newPoster modifies global defaultPoster
 func TestNewPoster(t *testing.T) {
 	// Cannot use t.Parallel() because newPoster modifies global defaultPoster
@@ -475,21 +465,6 @@ func getCanonicalTimeTests(_ time.Time) []struct {
 			name:             "prefers time attribute",
 			attrs:            map[string]any{"time": "2023-02-01T10:00:00Z"},
 			expectedContains: "2023-02-01T10:00:00Z",
-		},
-		{
-			name:             "falls back to timestamp",
-			attrs:            map[string]any{"timestamp": "2023-03-01T10:00:00Z"},
-			expectedContains: "2023-03-01T10:00:00Z",
-		},
-		{
-			name:             "falls back to event_time",
-			attrs:            map[string]any{"event_time": "2023-04-01T10:00:00Z"},
-			expectedContains: "2023-04-01T10:00:00Z",
-		},
-		{
-			name:             "prefers time over others",
-			attrs:            map[string]any{"time": "2023-05-01T10:00:00Z", "timestamp": "2023-06-01T10:00:00Z"},
-			expectedContains: "2023-05-01T10:00:00Z",
 		},
 	}
 }
@@ -906,7 +881,8 @@ func TestShipToDashboard_ActionFilters(t *testing.T) {
 			t.Parallel()
 
 			p, ch := mkTestPoster()
-			shipToDashboard(p, "host", "test-version", time.Now(), "msg", tt.attrs)
+			act := extractAction(tt.attrs)
+			shipToDashboard(p, "host", "test-version", time.Now(), "msg", act, tt.attrs)
 
 			select {
 			case <-ch:

@@ -156,6 +156,10 @@ func (s *Server) processPayload(ctx context.Context, in map[string]any, remoteIP
 		PayloadLen:      getIntFromPayload(in, "payload_len"),
 		SourcePort:      getIntFromPayload(in, "source_port"),
 		DestinationPort: getIntFromPayload(in, "destination_port"),
+		FlowID:          getStringFromPayload(in, "flow_id"),
+		Hostname:        getStringFromPayload(in, "hostname"),
+		Src:             getStringFromPayload(in, "src"),
+		Dst:             getStringFromPayload(in, "dst"),
 		Version:         getStringFromPayload(in, "version"),
 	}
 }
@@ -248,13 +252,9 @@ func SanitizeDomainField(value string) string {
 // isValidDomainChars checks if all characters are valid for domain/hostname fields.
 func isValidDomainChars(value string) bool {
 	for _, r := range value {
-		// Allow only printable ASCII (excluding control chars)
-		// Allow: a-z A-Z 0-9 . - _ (common in domains/hosts)
-		if r < 32 || r > 126 { // Control chars or non-ASCII
-			return false
-		}
-		// Block specific dangerous chars for log injection
-		if r == '\n' || r == '\r' || r == '\t' || r == '\x00' {
+		// Allow only printable ASCII: control chars (<32), DEL (127), and non-ASCII (>126) are rejected.
+		// This covers \n, \r, \t, \x00 and all other control characters.
+		if r < 32 || r > 126 {
 			return false
 		}
 	}
@@ -263,9 +263,9 @@ func isValidDomainChars(value string) bool {
 }
 
 // hasSuspiciousPatterns checks for common injection patterns.
+// Note: control characters (\r, \n, etc.) are already rejected by isValidDomainChars.
 func hasSuspiciousPatterns(value string) bool {
 	return strings.Contains(value, "..") ||
-		strings.Contains(value, "\r\n") ||
 		strings.Contains(value, "<script") ||
 		strings.HasPrefix(value, "-") ||
 		strings.HasPrefix(value, ".")

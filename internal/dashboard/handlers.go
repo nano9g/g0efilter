@@ -5,12 +5,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/g0lab/g0efilter/internal/logging"
+)
+
+const (
+	unblockTypeDomain = "domain"
+	unblockTypeIP     = "ip"
 )
 
 /* =========================
@@ -337,8 +343,15 @@ func (s *Server) listUnblocksHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // createUnblockHandler handles POST /api/v1/unblocks requests.
+//
+//nolint:tagliatelle // JSON uses snake_case for API compatibility
 func (s *Server) createUnblockHandler(w http.ResponseWriter, r *http.Request) {
-	//nolint:tagliatelle // JSON uses snake_case for API compatibility
+	const maxBody = 4096 // 4 KiB — small JSON payload
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxBody)
+
+	defer func() { _ = r.Body.Close() }()
+
 	var req struct {
 		Type           string `json:"type"`            // "domain" or "ip"
 		Value          string `json:"value"`           // the domain or IP to unblock
@@ -347,54 +360,48 @@ func (s *Server) createUnblockHandler(w http.ResponseWriter, r *http.Request) {
 
 	err := json.NewDecoder(r.Body).Decode(&req)
 	if err != nil {
-		s.logger.Debug("unblocks.create.invalid_json",
-			"remote", r.RemoteAddr,
-			"error", err.Error(),
-		)
+		s.logger.Debug("unblocks.create.invalid_json", "remote", r.RemoteAddr, "error", err.Error())
 		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
 
 		return
 	}
 
-	// Validate type
-	if req.Type != "domain" && req.Type != "ip" {
-		s.logger.Debug("unblocks.create.invalid_type",
-			"remote", r.RemoteAddr,
-			"type", req.Type,
-		)
+	if req.Type != unblockTypeDomain && req.Type != unblockTypeIP {
+		s.logger.Debug("unblocks.create.invalid_type", "remote", r.RemoteAddr, "type", req.Type)
 		http.Error(w, `{"error":"type must be 'domain' or 'ip'"}`, http.StatusBadRequest)
 
 		return
 	}
 
-	// Validate value
-	if strings.TrimSpace(req.Value) == "" {
-		s.logger.Debug("unblocks.create.empty_value",
-			"remote", r.RemoteAddr,
+	value, errMsg := validateUnblockValue(req.Type, req.Value)
+	if errMsg != "" {
+		s.logger.Debug("unblocks.create.invalid_value",
+			"remote", r.RemoteAddr, "type", req.Type, "value", req.Value, "reason", errMsg,
 		)
-		http.Error(w, `{"error":"value cannot be empty"}`, http.StatusBadRequest)
+		http.Error(w, `{"error":"`+errMsg+`"}`, http.StatusBadRequest)
 
 		return
 	}
 
 	targetHost := strings.TrimSpace(req.TargetHostname)
-	id := s.unblockStore.Add(req.Type, strings.TrimSpace(req.Value), targetHost)
+	id := s.unblockStore.Add(req.Type, value, targetHost)
+
+	if id == "" {
+		s.logger.Warn("unblocks.create.store_full", "remote", r.RemoteAddr)
+		http.Error(w, `{"error":"too many pending requests"}`, http.StatusTooManyRequests)
+
+		return
+	}
 
 	s.logger.Info("unblocks.created",
-		"remote", r.RemoteAddr,
-		"type", req.Type,
-		"value", req.Value,
-		"target_hostname", targetHost,
-		"id", id,
+		"remote", r.RemoteAddr, "type", req.Type,
+		"value", value, "target_hostname", targetHost, "id", id,
 	)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 
-	err = json.NewEncoder(w).Encode(map[string]string{
-		"id":     id,
-		"status": "pending",
-	})
+	err = json.NewEncoder(w).Encode(map[string]string{"id": id, "status": "pending"})
 	if err != nil {
 		s.logger.Error("failed to encode unblock response", "error", err)
 	}
@@ -402,6 +409,12 @@ func (s *Server) createUnblockHandler(w http.ResponseWriter, r *http.Request) {
 
 // ackUnblockHandler handles POST /api/v1/unblocks/ack requests.
 func (s *Server) ackUnblockHandler(w http.ResponseWriter, r *http.Request) {
+	const maxBody = 4096 // 4 KiB — small JSON payload
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxBody)
+
+	defer func() { _ = r.Body.Close() }()
+
 	var req struct {
 		ID string `json:"id"`
 	}
@@ -477,12 +490,9 @@ func SanitizeSearchQuery(q string) string {
 // isValidSearchChars checks if query contains only valid characters.
 func isValidSearchChars(q string) bool {
 	for _, r := range q {
-		// Reject control characters
+		// Reject control characters (<32) and DEL (127).
+		// This covers \n, \r, \x00 and all other control characters.
 		if r < 32 || r == 127 {
-			return false
-		}
-		// Block CRLF injection
-		if r == '\n' || r == '\r' || r == '\x00' {
 			return false
 		}
 	}
@@ -491,8 +501,32 @@ func isValidSearchChars(q string) bool {
 }
 
 // hasInjectionPatterns checks for common injection attack patterns.
+// Note: control characters (\r, \n, etc.) are already rejected by isValidSearchChars.
 func hasInjectionPatterns(q string) bool {
-	return strings.Contains(q, "\r\n") ||
-		strings.Contains(q, "<script") ||
+	return strings.Contains(q, "<script") ||
 		strings.Contains(q, "javascript:")
+}
+
+// validateUnblockValue validates and sanitizes the value for an unblock request.
+// Returns the cleaned value and an error message (empty if valid).
+func validateUnblockValue(reqType, rawValue string) (string, string) {
+	value := strings.TrimSpace(rawValue)
+	if value == "" {
+		return "", "value cannot be empty"
+	}
+
+	if reqType == unblockTypeDomain {
+		value = SanitizeDomainField(value)
+		if value == "" || value == "[invalid]" {
+			return "", "invalid domain"
+		}
+
+		return value, ""
+	}
+
+	if net.ParseIP(value) == nil {
+		return "", "invalid ip address"
+	}
+
+	return value, ""
 }

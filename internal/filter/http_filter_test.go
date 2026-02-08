@@ -224,27 +224,6 @@ func TestSetHTTPTimeouts(t *testing.T) {
 	}
 }
 
-// Test internal utility functions exist.
-func TestHostFilterUtilities(t *testing.T) {
-	t.Parallel()
-
-	t.Run("functions exist", func(t *testing.T) {
-		t.Parallel()
-
-		// These functions are complex to test in isolation
-		// but we can verify they exist and would be covered by integration tests
-		t.Log("handleBlockedHTTP function exists")
-		t.Log("handleAllowedHTTP function exists")
-		t.Log("getDestinationInfo function exists")
-		t.Log("logBlockedHTTP function exists")
-		t.Log("logAllowedHost function exists")
-		t.Log("logHTTPBackendError function exists")
-		t.Log("setHTTPTimeouts function exists")
-		t.Log("spliceHTTPConnections function exists")
-		t.Log("readHeadWithTextproto function exists")
-	})
-}
-
 // Test functions with 0% coverage from http_filter.go.
 func TestHostFilterZeroCoverage(t *testing.T) {
 	t.Parallel()
@@ -356,61 +335,22 @@ func testLogFunctions(t *testing.T) {
 	})
 }
 
-// Test connection functions exist.
-func TestHTTPConnectionFunctions(t *testing.T) {
-	t.Parallel()
-
-	// Test that complex connection functions exist
-	// These require integration testing with real network setup
-	t.Log("HTTP connection functions exist but require integration testing")
-
-	// Test basic connectivity
-	r1, w1 := net.Pipe()
-	r2, w2 := net.Pipe()
-
-	// Close connections to avoid hanging
-	_ = w1.Close()
-	_ = w2.Close()
-	_ = r1.Close()
-	_ = r2.Close()
-
-	t.Log("Network connection functions tested with mock pipes")
-}
-
 func TestHandleBlockedHTTP(t *testing.T) {
 	t.Parallel()
-
-	// This function calls logBlockedHTTP which calls originalDstTCP
-	// requiring a real TCP connection. Testing with mocks would cause panics.
-	t.Log("handleBlockedHTTP requires real TCP connection, skipping unit test")
-	t.Log("This function is covered by integration tests")
+	t.Skip("requires real TCP connection with SO_ORIGINAL_DST; covered by integration tests")
 }
 
 func TestLogBlockedHTTP(t *testing.T) {
 	t.Parallel()
-
-	// This function calls getDestinationInfo which calls originalDstTCP
-	// requiring a real TCP connection. Testing with mocks would cause panics.
-	t.Log("logBlockedHTTP requires real TCP connection, skipping unit test")
-	t.Log("This function is covered by integration tests")
+	t.Skip("requires real TCP connection with SO_ORIGINAL_DST; covered by integration tests")
 }
 
 func TestGetDestinationInfo(t *testing.T) {
 	t.Parallel()
-
-	// This function calls originalDstTCP which requires a real TCP connection
-	// Testing with mocks would cause panics.
-	t.Log("getDestinationInfo requires real TCP connection, skipping unit test")
-	t.Log("This function is covered by integration tests")
+	t.Skip("requires real TCP connection with SO_ORIGINAL_DST; covered by integration tests")
 }
 
 func TestHandleAllowedHTTP(t *testing.T) {
 	t.Parallel()
-
-	// This function requires a real TCP connection to work properly
-	// Testing with mock connections would just cause panics
-	// The function is better tested through integration tests
-
-	t.Log("handleAllowedHTTP requires real TCP connection, skipping unit test")
-	t.Log("This function is covered by integration tests")
+	t.Skip("requires real TCP connection with SO_ORIGINAL_DST; covered by integration tests")
 }

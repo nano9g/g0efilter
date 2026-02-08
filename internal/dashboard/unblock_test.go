@@ -3,6 +3,7 @@ package dashboard
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -193,7 +194,6 @@ func TestUnblockHandlers(t *testing.T) {
 			apiKey:       "test-key",
 			readLimit:    100,
 			rateLimiter:  newRateLimiter(50, 100),
-			adminLimiter: newRateLimiter(1, 5),
 		}
 	}
 
@@ -416,4 +416,304 @@ func TestGenerateID(t *testing.T) {
 			t.Errorf("ID length = %d, want 12", len(id))
 		}
 	})
+}
+
+func TestUnblockStore_MaxPending(t *testing.T) {
+	t.Parallel()
+
+	store := newUnblockStore()
+	store.maxPending = 3 // small cap for testing
+
+	id1 := store.Add("domain", "a.com", "")
+	id2 := store.Add("domain", "b.com", "")
+	id3 := store.Add("domain", "c.com", "")
+
+	if id1 == "" || id2 == "" || id3 == "" {
+		t.Fatal("first 3 adds should succeed")
+	}
+
+	// Fourth should be rejected
+	id4 := store.Add("domain", "d.com", "")
+	if id4 != "" {
+		t.Errorf("4th add should return empty string, got %s", id4)
+	}
+
+	// Duplicates still work (don't count against cap)
+	idDup := store.Add("domain", "a.com", "")
+	if idDup != id1 {
+		t.Errorf("duplicate should return existing ID %s, got %s", id1, idDup)
+	}
+
+	// Acknowledging one frees a slot
+	store.Acknowledge(id1)
+
+	id5 := store.Add("domain", "e.com", "")
+	if id5 == "" {
+		t.Error("add after ack should succeed")
+	}
+}
+
+func TestUnblockStore_MaxCompleted(t *testing.T) {
+	t.Parallel()
+
+	store := newUnblockStore()
+
+	// Add and acknowledge 110 requests to overflow the maxCompleted=100 bound
+	for i := range 110 {
+		id := store.Add("domain", fmt.Sprintf("d%d.com", i), "")
+		if id == "" {
+			t.Fatalf("Add %d failed", i)
+		}
+
+		if !store.Acknowledge(id) {
+			t.Fatalf("Acknowledge %d failed", i)
+		}
+	}
+
+	completed := store.GetCompleted()
+	if len(completed) != 100 {
+		t.Errorf("completed length = %d, want 100 (bounded)", len(completed))
+	}
+
+	// Oldest entries should have been trimmed — last entry should be d109.com
+	last := completed[len(completed)-1]
+	if last.Value != "d109.com" {
+		t.Errorf("last completed = %s, want d109.com", last.Value)
+	}
+}
+
+func TestValidateUnblockValue(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		reqType string
+		value   string
+		wantVal string
+		wantErr string
+	}{
+		{"valid domain", "domain", "example.com", "example.com", ""},
+		{"valid subdomain", "domain", "api.example.com", "api.example.com", ""},
+		{"valid IPv4", "ip", "192.168.1.1", "192.168.1.1", ""},
+		{"valid IPv6", "ip", "::1", "::1", ""},
+		{"empty value", "domain", "", "", "value cannot be empty"},
+		{"whitespace only", "domain", "   ", "", "value cannot be empty"},
+		{"invalid domain with injection", "domain", "evil.com\r\nX-Inject: header", "", "invalid domain"},
+		{"invalid domain with script", "domain", "<script>alert(1)</script>", "", "invalid domain"},
+		{"invalid IP", "ip", "not-an-ip", "", "invalid ip address"},
+		{"domain as IP type", "ip", "example.com", "", "invalid ip address"},
+		{"trimmed domain", "domain", "  example.com  ", "example.com", ""},
+		{"trimmed IP", "ip", "  10.0.0.1  ", "10.0.0.1", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			val, errMsg := validateUnblockValue(tt.reqType, tt.value)
+			if val != tt.wantVal {
+				t.Errorf("value = %q, want %q", val, tt.wantVal)
+			}
+
+			if errMsg != tt.wantErr {
+				t.Errorf("errMsg = %q, want %q", errMsg, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestCreateUnblockHandler_OversizedBody(t *testing.T) {
+	t.Parallel()
+
+	lg := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
+	srv := &Server{
+		logger:       lg,
+		store:        newMemStore(100),
+		broadcaster:  newBroadcaster(),
+		unblockStore: newUnblockStore(),
+		apiKey:       "test-key",
+		readLimit:    100,
+		rateLimiter:  newRateLimiter(50, 100),
+	}
+
+	// Send a body larger than the 4 KiB limit
+	bigBody := strings.Repeat("x", 8192)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/unblocks", strings.NewReader(bigBody))
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+
+	srv.createUnblockHandler(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("Status = %d, want %d for oversized body", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestCreateUnblockHandler_StoreFull(t *testing.T) {
+	t.Parallel()
+
+	lg := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	us := newUnblockStore()
+	us.maxPending = 1 // allow only 1 pending
+
+	srv := &Server{
+		logger:       lg,
+		store:        newMemStore(100),
+		broadcaster:  newBroadcaster(),
+		unblockStore: us,
+		apiKey:       "test-key",
+		readLimit:    100,
+		rateLimiter:  newRateLimiter(50, 100),
+	}
+
+	// First request succeeds
+	body1 := `{"type":"domain","value":"example.com"}`
+	req1 := httptest.NewRequest(http.MethodPost, "/api/v1/unblocks", strings.NewReader(body1))
+	req1.Header.Set("Content-Type", "application/json")
+
+	rec1 := httptest.NewRecorder()
+	srv.createUnblockHandler(rec1, req1)
+
+	if rec1.Code != http.StatusCreated {
+		t.Fatalf("First request: status = %d, want %d", rec1.Code, http.StatusCreated)
+	}
+
+	// Second request hits capacity
+	body2 := `{"type":"domain","value":"other.com"}`
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/unblocks", strings.NewReader(body2))
+	req2.Header.Set("Content-Type", "application/json")
+
+	rec2 := httptest.NewRecorder()
+	srv.createUnblockHandler(rec2, req2)
+
+	if rec2.Code != http.StatusTooManyRequests {
+		t.Errorf("Second request: status = %d, want %d", rec2.Code, http.StatusTooManyRequests)
+	}
+
+	var errResp map[string]string
+
+	err := json.NewDecoder(rec2.Body).Decode(&errResp)
+	if err != nil {
+		t.Fatalf("Failed to decode error response: %v", err)
+	}
+
+	if errResp["error"] != "too many pending requests" {
+		t.Errorf("error = %q, want 'too many pending requests'", errResp["error"])
+	}
+}
+
+func TestAckUnblockHandler_OversizedBody(t *testing.T) {
+	t.Parallel()
+
+	lg := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
+	srv := &Server{
+		logger:       lg,
+		store:        newMemStore(100),
+		broadcaster:  newBroadcaster(),
+		unblockStore: newUnblockStore(),
+		apiKey:       "test-key",
+		readLimit:    100,
+		rateLimiter:  newRateLimiter(50, 100),
+	}
+
+	bigBody := strings.Repeat("x", 8192)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/unblocks/ack", strings.NewReader(bigBody))
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+
+	srv.ackUnblockHandler(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("Status = %d, want %d for oversized body", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestAckUnblockHandler_EmptyID(t *testing.T) {
+	t.Parallel()
+
+	lg := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
+	srv := &Server{
+		logger:       lg,
+		store:        newMemStore(100),
+		broadcaster:  newBroadcaster(),
+		unblockStore: newUnblockStore(),
+		apiKey:       "test-key",
+		readLimit:    100,
+		rateLimiter:  newRateLimiter(50, 100),
+	}
+
+	tests := []struct {
+		name string
+		body string
+	}{
+		{"empty string", `{"id":""}`},
+		{"whitespace only", `{"id":"   "}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/unblocks/ack", strings.NewReader(tt.body))
+			req.Header.Set("Content-Type", "application/json")
+
+			rec := httptest.NewRecorder()
+
+			srv.ackUnblockHandler(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("%s: Status = %d, want %d", tt.name, rec.Code, http.StatusBadRequest)
+			}
+		})
+	}
+}
+
+func TestCreateUnblockHandler_InvalidIP(t *testing.T) {
+	t.Parallel()
+
+	lg := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
+	srv := &Server{
+		logger:       lg,
+		store:        newMemStore(100),
+		broadcaster:  newBroadcaster(),
+		unblockStore: newUnblockStore(),
+		apiKey:       "test-key",
+		readLimit:    100,
+		rateLimiter:  newRateLimiter(50, 100),
+	}
+
+	tests := []struct {
+		name  string
+		body  string
+		want  int
+		errIs string
+	}{
+		{"not an IP", `{"type":"ip","value":"not-an-ip"}`, http.StatusBadRequest, "invalid ip address"},
+		{"domain as IP", `{"type":"ip","value":"example.com"}`, http.StatusBadRequest, "invalid ip address"},
+		{"invalid type", `{"type":"foo","value":"1.2.3.4"}`, http.StatusBadRequest, "type must be"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/unblocks", strings.NewReader(tt.body))
+			req.Header.Set("Content-Type", "application/json")
+
+			rec := httptest.NewRecorder()
+
+			srv.createUnblockHandler(rec, req)
+
+			if rec.Code != tt.want {
+				t.Errorf("%s: Status = %d, want %d", tt.name, rec.Code, tt.want)
+			}
+
+			if !strings.Contains(rec.Body.String(), tt.errIs) {
+				t.Errorf("%s: body = %q, want to contain %q", tt.name, rec.Body.String(), tt.errIs)
+			}
+		})
+	}
 }

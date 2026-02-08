@@ -20,7 +20,7 @@ func Serve80(ctx context.Context, allowlist []string, opts Options) error {
 		opts.ListenAddr = ":8080" // typical HTTP redirect port
 	}
 
-	return serveTCP(ctx, opts.ListenAddr, opts.Logger, handleHTTP, allowlist, opts, "http")
+	return serveTCP(ctx, opts.ListenAddr, opts.Logger, handleHTTP, NormalizePatterns(allowlist), opts, "http")
 }
 
 // handleHTTP processes an individual HTTP connection for Host header filtering.
@@ -115,10 +115,6 @@ func handleBlockedHTTP(
 	sourcePort int,
 	opts Options,
 ) {
-	if opts.Logger == nil {
-		return
-	}
-
 	logBlockedHTTP(conn, tc, host, parseErr, sourceIP, sourcePort, opts)
 
 	if opts.DropWithRST {
@@ -146,7 +142,7 @@ func logBlockedHTTP(
 	}
 
 	// Try to recover original dst so we can compute flow_id and emit synthetic redirect
-	_, destIP, destPort := getDestinationInfo(conn, tc, sourceIP, sourcePort, opts)
+	destIP, destPort := getDestinationInfo(conn, tc, sourceIP, sourcePort, opts)
 
 	// Emitting normalised fields for ingestion; include flow_id when available
 	logBlockedConnection(opts, componentHTTP, reason, host, conn, destIP, destPort)
@@ -159,23 +155,25 @@ func getDestinationInfo(
 	sourceIP string,
 	sourcePort int,
 	opts Options,
-) (string, string, int) {
+) (string, int) {
 	tgt, derr := originalDstTCP(tc)
 	if derr == nil {
-		flowID := EmitSynthetic(opts.Logger, "http", conn, tgt)
+		_ = EmitSynthetic(opts.Logger, "http", conn, tgt)
 		destIP, destPort := parseHostPort(tgt)
 
-		return flowID, destIP, destPort
+		return destIP, destPort
 	}
 
 	// optional: log original dst recovery failure at debug
-	opts.Logger.Debug("http.orig_dst_unavailable_for_blocked",
-		"err", derr.Error(),
-		"source_ip", sourceIP,
-		"source_port", sourcePort,
-	)
+	if opts.Logger != nil {
+		opts.Logger.Debug("http.orig_dst_unavailable_for_blocked",
+			"err", derr.Error(),
+			"source_ip", sourceIP,
+			"source_port", sourcePort,
+		)
+	}
 
-	return "", "", 0
+	return "", 0
 }
 
 // handleAllowedHTTP handles allowed HTTP requests.

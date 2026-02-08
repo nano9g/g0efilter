@@ -78,7 +78,7 @@ func (s *memStore) Query(_ context.Context, q string, sinceID int64, limit int) 
 		limit = 200
 	}
 
-	q = strings.TrimSpace(q)
+	q = strings.ToLower(strings.TrimSpace(q))
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -116,13 +116,13 @@ func (s *memStore) shouldSkipEntry(entry LogEntry, q string, sinceID int64) bool
 		return true
 	}
 
-	// Query filter
+	// Query filter (q is already lowered by caller)
 	if q != "" {
 		hay := strings.ToLower(strings.Join([]string{
 			entry.Message,
 			string(entry.Fields),
 		}, " "))
-		if !strings.Contains(hay, strings.ToLower(q)) {
+		if !strings.Contains(hay, q) {
 			return true
 		}
 	}

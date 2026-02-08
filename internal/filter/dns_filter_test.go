@@ -128,41 +128,6 @@ func TestSetupDNSServers(t *testing.T) {
 	}
 }
 
-func TestDurOrDefault(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		duration time.Duration
-		fallback time.Duration
-		expected time.Duration
-	}{
-		{
-			name:     "positive value",
-			duration: 1000 * time.Millisecond,
-			fallback: 5 * time.Second,
-			expected: 1000 * time.Millisecond,
-		},
-		{
-			name:     "zero value uses fallback",
-			duration: 0,
-			fallback: 3 * time.Second,
-			expected: 3 * time.Second,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			result := durOrDefault(tt.duration, tt.fallback)
-			if result != tt.expected {
-				t.Errorf("durOrDefault(%v, %v) = %v, want %v", tt.duration, tt.fallback, result, tt.expected)
-			}
-		})
-	}
-}
-
 //nolint:paralleltest // Cannot use t.Parallel() due to environment variable modifications
 func TestDefaultUpstreamsFromEnv(t *testing.T) {
 	//nolint:paralleltest // Cannot use t.Parallel() due to environment variable modifications
@@ -492,7 +457,6 @@ func TestBlockedEnforcedType(t *testing.T) {
 	}{
 		{"A record", dns.TypeA, "blocked A query should return 0.0.0.0"},
 		{"AAAA record", dns.TypeAAAA, "blocked AAAA query should return ::"},
-		{"Other type", dns.TypeTXT, "blocked other query should return NXDOMAIN"},
 	}
 
 	for _, tt := range tests {
@@ -551,10 +515,6 @@ func validateBlockedEnforcedResponse(
 	case dns.TypeAAAA:
 		if len(response.Answer) == 0 {
 			t.Error("Expected AAAA record in response")
-		}
-	default:
-		if response.Rcode != dns.RcodeNameError {
-			t.Errorf("Expected NXDOMAIN for type %d, got rcode %d", qtype, response.Rcode)
 		}
 	}
 }

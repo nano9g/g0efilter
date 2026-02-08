@@ -180,82 +180,19 @@ func TestSetConnectionTimeouts(t *testing.T) {
 	}
 }
 
-// Test TLS connection wrapper.
-func TestTLSConnWrapper(t *testing.T) {
-	t.Parallel()
-
-	t.Run("TLS connection wrapper methods exist", func(t *testing.T) {
-		t.Parallel()
-
-		// The tlsConnWrapper struct provides methods for TLS connection handling
-		// These are tested indirectly through integration tests
-		t.Log("tlsConnWrapper Read method exists")
-		t.Log("tlsConnWrapper Write method exists")
-		t.Log("tlsConnWrapper Close method exists")
-		t.Log("tlsConnWrapper LocalAddr method exists")
-		t.Log("tlsConnWrapper RemoteAddr method exists")
-		t.Log("tlsConnWrapper SetDeadline method exists")
-		t.Log("tlsConnWrapper SetReadDeadline method exists")
-		t.Log("tlsConnWrapper SetWriteDeadline method exists")
-	})
-}
-
-func TestSNIExtraction(t *testing.T) {
-	t.Parallel()
-
-	t.Run("HTTPS extraction functions exist", func(t *testing.T) {
-		t.Parallel()
-
-		// These functions handle TLS handshake parsing which is complex to unit test
-		// They would be covered by integration tests
-		t.Log("extractSNIFromConnection function exists")
-		t.Log("peekClientHello function exists")
-		t.Log("readClientHello function exists")
-	})
-}
-
-// Test HTTPS filter utility functions.
-func TestSNIFilterUtilities(t *testing.T) {
-	t.Parallel()
-
-	t.Run("HTTPS filter functions exist", func(t *testing.T) {
-		t.Parallel()
-
-		// These functions are complex to test in isolation
-		// but we can verify they exist and would be covered by integration tests
-		t.Log("handle function exists")
-		t.Log("handleBlockedHTTPS function exists")
-		t.Log("handleAllowedHTTPS function exists")
-		t.Log("logBlockedHTTPS function exists")
-		t.Log("connectAndSpliceHTTPS function exists")
-	})
-}
-
 func TestHandleBlockedHTTPS(t *testing.T) {
 	t.Parallel()
-
-	// This function calls logBlockedHTTPS which calls originalDstTCP
-	// requiring a real TCP connection. Testing with mocks would cause panics.
-	t.Log("handleBlockedHTTPS requires real TCP connection, skipping unit test")
-	t.Log("This function is covered by integration tests")
+	t.Skip("requires real TCP connection with SO_ORIGINAL_DST; covered by integration tests")
 }
 
 func TestLogBlockedHTTPS(t *testing.T) {
 	t.Parallel()
-
-	// This function calls originalDstTCP which requires a real TCP connection
-	// Testing with mocks would cause panics.
-	t.Log("logBlockedHTTPS requires real TCP connection, skipping unit test")
-	t.Log("This function is covered by integration tests")
+	t.Skip("requires real TCP connection with SO_ORIGINAL_DST; covered by integration tests")
 }
 
 func TestHandleAllowedHTTPS(t *testing.T) {
 	t.Parallel()
-
-	// This function calls originalDstTCP which requires a real TCP connection
-	// Testing with mocks would cause panics.
-	t.Log("handleAllowedHTTPS requires real TCP connection, skipping unit test")
-	t.Log("This function is covered by integration tests")
+	t.Skip("requires real TCP connection with SO_ORIGINAL_DST; covered by integration tests")
 }
 
 func TestConnectAndSpliceHTTPS(t *testing.T) {

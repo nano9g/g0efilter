@@ -2,6 +2,7 @@
 package policy
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -381,9 +382,8 @@ func TestLoadConfigPathTraversal(t *testing.T) {
 			if err != nil {
 				hasTraversalError := strings.Contains(err.Error(), "path traversal not allowed")
 
-				hasInvalidPathError := strings.Contains(err.Error(), "invalid file path")
-				if !hasTraversalError && !hasInvalidPathError {
-					t.Errorf("Expected path traversal or invalid path error for %q, got: %v", path, err)
+				if !hasTraversalError {
+					t.Errorf("Expected path traversal error for %q, got: %v", path, err)
 				}
 			}
 		}
@@ -411,11 +411,10 @@ func TestLoadConfigInvalidPaths(t *testing.T) {
 
 			// Some of these will be caught by file not found, others by path validation
 			if err != nil {
-				hasInvalidPath := strings.Contains(err.Error(), "invalid file path")
 				hasTraversalError := strings.Contains(err.Error(), "path traversal not allowed")
 				hasAccessError := strings.Contains(err.Error(), "error accessing file")
 
-				if !hasInvalidPath && !hasTraversalError && !hasAccessError {
+				if !hasTraversalError && !hasAccessError {
 					t.Errorf("Expected path validation error for %q, got: %v", path, err)
 				}
 			}
@@ -566,7 +565,7 @@ func TestValidateIPs(t *testing.T) {
 				testData = []string{}
 			}
 
-			result, err := validateIPs(nil, "test.yaml", testData)
+			result, err := validateIPs(slog.Default(), "test.yaml", testData)
 			validateSliceResult(t, "validateIPs", result, err, tt.wantErr, tt.expected)
 		})
 	}
@@ -594,7 +593,7 @@ func TestValidateDomains(t *testing.T) {
 				testData = []string{}
 			}
 
-			result, err := validateDomains(nil, "test.yaml", testData)
+			result, err := validateDomains(slog.Default(), "test.yaml", testData)
 			validateSliceResult(t, "validateDomains", result, err, tt.wantErr, tt.expected)
 		})
 	}
@@ -676,7 +675,7 @@ func TestLoadFromEnv(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			ips, domains, err := loadFromEnv(nil, tt.envIPs, tt.envDomains)
+			ips, domains, err := loadFromEnv(slog.Default(), tt.envIPs, tt.envDomains)
 
 			if tt.wantErr {
 				if err == nil {

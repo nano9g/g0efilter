@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func discardLogger() *slog.Logger {
@@ -46,39 +47,31 @@ func TestGetenvDefault(t *testing.T) {
 	}
 }
 
-func compareConfig(t *testing.T, got, want config) {
-	t.Helper()
+func TestParseDurationDefault(t *testing.T) {
+	t.Parallel()
 
-	if got.policyPath != want.policyPath {
-		t.Errorf("policyPath = %v, want %v", got.policyPath, want.policyPath)
+	fallback := 42 * time.Second
+
+	tests := []struct {
+		name string
+		in   string
+		want time.Duration
+	}{
+		{name: "valid", in: "5s", want: 5 * time.Second},
+		{name: "valid minutes", in: "2m", want: 2 * time.Minute},
+		{name: "invalid", in: "nope", want: fallback},
+		{name: "empty", in: "", want: fallback},
 	}
 
-	if got.httpPort != want.httpPort {
-		t.Errorf("httpPort = %v, want %v", got.httpPort, want.httpPort)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	if got.httpsPort != want.httpsPort {
-		t.Errorf("httpsPort = %v, want %v", got.httpsPort, want.httpsPort)
-	}
-
-	if got.dnsPort != want.dnsPort {
-		t.Errorf("dnsPort = %v, want %v", got.dnsPort, want.dnsPort)
-	}
-
-	if got.logLevel != want.logLevel {
-		t.Errorf("logLevel = %v, want %v", got.logLevel, want.logLevel)
-	}
-
-	if got.logFile != want.logFile {
-		t.Errorf("logFile = %v, want %v", got.logFile, want.logFile)
-	}
-
-	if got.hostname != want.hostname {
-		t.Errorf("hostname = %v, want %v", got.hostname, want.hostname)
-	}
-
-	if got.mode != want.mode {
-		t.Errorf("mode = %v, want %v", got.mode, want.mode)
+			got := parseDurationDefault(tt.in, fallback)
+			if got != tt.want {
+				t.Fatalf("parseDurationDefault(%q) = %v, want %v", tt.in, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -86,18 +79,26 @@ func TestLoadConfigDefaults(t *testing.T) {
 	t.Setenv("HOSTNAME", "")
 
 	want := config{
-		policyPath: "/app/policy.yaml",
-		httpPort:   "8080",
-		httpsPort:  "8443",
-		dnsPort:    "53",
-		logLevel:   "INFO",
-		logFile:    "",
-		hostname:   "",
-		mode:       "https",
+		policyPath:          "/app/policy.yaml",
+		httpPort:            "8080",
+		httpsPort:           "8443",
+		dnsPort:             "53",
+		logLevel:            "INFO",
+		logFile:             "",
+		hostname:            "",
+		mode:                "https",
+		enableRemoteUnblock: false,
+		dashboardHost:       "",
+		dashboardAPIKey:     "",
+		unblockPollInterval: 10 * time.Second,
+		notificationHost:    "",
+		notificationKey:     "",
 	}
 
 	got := loadConfig()
-	compareConfig(t, got, want)
+	if got != want {
+		t.Fatalf("loadConfig() defaults:\ngot  %+v\nwant %+v", got, want)
+	}
 }
 
 func TestLoadConfigCustomValues(t *testing.T) {
@@ -109,20 +110,34 @@ func TestLoadConfigCustomValues(t *testing.T) {
 	t.Setenv("LOG_FILE", "/var/log/g0efilter.log")
 	t.Setenv("HOSTNAME", "test-host")
 	t.Setenv("FILTER_MODE", "DNS")
+	t.Setenv("ENABLE_REMOTE_UNBLOCK", "true")
+	t.Setenv("DASHBOARD_HOST", "dash.example.com")
+	t.Setenv("DASHBOARD_API_KEY", "secret123")
+	t.Setenv("UNBLOCK_POLL_INTERVAL", "30s")
+	t.Setenv("NOTIFICATION_HOST", "notify.example.com")
+	t.Setenv("NOTIFICATION_KEY", "nkey456")
 
 	want := config{
-		policyPath: "/custom/policy.yaml",
-		httpPort:   "9080",
-		httpsPort:  "9443",
-		dnsPort:    "5353",
-		logLevel:   "DEBUG",
-		logFile:    "/var/log/g0efilter.log",
-		hostname:   "test-host",
-		mode:       "dns",
+		policyPath:          "/custom/policy.yaml",
+		httpPort:            "9080",
+		httpsPort:           "9443",
+		dnsPort:             "5353",
+		logLevel:            "DEBUG",
+		logFile:             "/var/log/g0efilter.log",
+		hostname:            "test-host",
+		mode:                "dns",
+		enableRemoteUnblock: true,
+		dashboardHost:       "dash.example.com",
+		dashboardAPIKey:     "secret123",
+		unblockPollInterval: 30 * time.Second,
+		notificationHost:    "notify.example.com",
+		notificationKey:     "nkey456",
 	}
 
 	got := loadConfig()
-	compareConfig(t, got, want)
+	if got != want {
+		t.Fatalf("loadConfig() custom:\ngot  %+v\nwant %+v", got, want)
+	}
 }
 
 func TestLoadConfigFilterModeTrimsAndLowercases(t *testing.T) {
@@ -287,5 +302,35 @@ func TestSendLatestKeepsMostRecent(t *testing.T) {
 	got := <-ch
 	if got.hash != "h2" {
 		t.Fatalf("expected latest hash %q, got %q", "h2", got.hash)
+	}
+}
+
+func TestHandleVersionFlag(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{"--version", []string{"app", "--version"}, true},
+		{"version", []string{"app", "version"}, true},
+		{"-V", []string{"app", "-V"}, true},
+		{"-v", []string{"app", "-v"}, true},
+		{"no args", []string{"app"}, false},
+		{"empty", []string{}, false},
+		{"other flag", []string{"app", "--help"}, false},
+		{"version not first", []string{"app", "run", "--version"}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := HandleVersionFlag(tt.args, "1.0.0", "2025-01-01", "abc123")
+			if got != tt.want {
+				t.Errorf("HandleVersionFlag(%v) = %v, want %v", tt.args, got, tt.want)
+			}
+		})
 	}
 }

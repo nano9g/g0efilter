@@ -598,7 +598,7 @@ func TestBuildLogFields(t *testing.T) {
 			validateBasicFields(t, fields)
 			fieldMap := convertFieldsToMap(t, fields)
 			validateRequiredFields(t, fieldMap)
-			validateConditionalFields(t, fieldMap, tt.src)
+			validateConditionalFields(t, fieldMap, tt)
 		})
 	}
 }
@@ -640,7 +640,7 @@ func convertFieldsToMap(t *testing.T, fields []any) map[string]any {
 func validateRequiredFields(t *testing.T, fieldMap map[string]any) {
 	t.Helper()
 
-	requiredFields := []string{"time", "protocol", "payload_len"}
+	requiredFields := []string{"protocol", "payload_len"}
 	for _, field := range requiredFields {
 		if _, exists := fieldMap[field]; !exists {
 			t.Errorf("buildLogFields() missing '%s' field", field)
@@ -648,13 +648,43 @@ func validateRequiredFields(t *testing.T, fieldMap map[string]any) {
 	}
 }
 
-func validateConditionalFields(t *testing.T, fieldMap map[string]any, src string) {
+func validateConditionalFields(t *testing.T, fieldMap map[string]any, tt struct {
+	name            string
+	src             string
+	dst             string
+	proto           string
+	sourceIP        string
+	destinationIP   string
+	flowID          string
+	sourcePort      int
+	destinationPort int
+	payloadLen      int
+},
+) {
 	t.Helper()
 
-	// Check conditional fields
-	if src != "" {
-		if _, exists := fieldMap["src"]; !exists {
-			t.Error("buildLogFields() missing 'src' field")
+	optional := []struct {
+		key     string
+		present bool
+	}{
+		{"src", tt.src != ""},
+		{"dst", tt.dst != ""},
+		{"source_ip", tt.sourceIP != ""},
+		{"destination_ip", tt.destinationIP != ""},
+		{"source_port", tt.sourcePort != 0},
+		{"destination_port", tt.destinationPort != 0},
+		{"flow_id", tt.flowID != ""},
+	}
+
+	for _, o := range optional {
+		_, exists := fieldMap[o.key]
+
+		if o.present && !exists {
+			t.Errorf("buildLogFields() missing expected field %q", o.key)
+		}
+
+		if !o.present && exists {
+			t.Errorf("buildLogFields() has unexpected field %q", o.key)
 		}
 	}
 }
@@ -734,19 +764,6 @@ func TestCreateNflogHook(t *testing.T) {
 	if result != 0 {
 		t.Errorf("createNflogHook() hook returned %d, want 0", result)
 	}
-}
-
-func TestStreamNfLog(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping nflog stream test in short mode")
-	}
-
-	t.Parallel()
-
-	// StreamNfLog uses context.Background() which has no timeout.
-	// Since nflog requires root/CAP_NET_ADMIN, this will fail immediately in test environment.
-	// The actual functionality is tested in TestStreamNfLogWithLogger which uses a cancellable context.
-	t.Skip("StreamNfLog() uses background context - tested via TestStreamNfLogWithLogger")
 }
 
 func TestStreamNfLogWithLogger(t *testing.T) {
@@ -1258,13 +1275,11 @@ func TestParsePacketInfo(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			src, dst, proto, sourceIP, destinationIP, sourcePort, destinationPort := parsePacketInfo(tt.payload)
+			pkt := parsePacketInfo(tt.payload)
 
-			// For invalid payloads, we expect empty strings
-			if src != tt.expectSrc || dst != tt.expectDst || proto != tt.expectProto {
-				t.Logf("parsePacketInfo() = src:%s, dst:%s, proto:%s, sourceIP:%s, destinationIP:%s, "+
-					"sourcePort:%d, destinationPort:%d",
-					src, dst, proto, sourceIP, destinationIP, sourcePort, destinationPort)
+			if pkt.Src != tt.expectSrc || pkt.Dst != tt.expectDst || pkt.Protocol != tt.expectProto {
+				t.Errorf("parsePacketInfo() = src:%s, dst:%s, proto:%s, want src:%s, dst:%s, proto:%s",
+					pkt.Src, pkt.Dst, pkt.Protocol, tt.expectSrc, tt.expectDst, tt.expectProto)
 			}
 		})
 	}
@@ -1282,19 +1297,7 @@ func TestProcessActionEvent(t *testing.T) {
 			logger := slog.Default()
 
 			// This function just logs, so we call it to exercise the code path
-			processActionEvent(
-				logger,
-				tt.action,
-				tt.flowID,
-				tt.src,
-				tt.dst,
-				tt.proto,
-				tt.sourceIP,
-				tt.destinationIP,
-				tt.sourcePort,
-				tt.destinationPort,
-				tt.payloadLen,
-			)
+			processActionEvent(logger, tt.action, tt.flowID, tt.pkt, tt.payloadLen)
 
 			// If we reach here without panic, the test passes
 			t.Logf("processActionEvent() completed for action %s", tt.action)
@@ -1303,72 +1306,45 @@ func TestProcessActionEvent(t *testing.T) {
 }
 
 type processActionEventTest struct {
-	name            string
-	action          string
-	flowID          string
-	src             string
-	dst             string
-	proto           string
-	sourceIP        string
-	destinationIP   string
-	sourcePort      int
-	destinationPort int
-	payloadLen      int
+	name       string
+	action     string
+	flowID     string
+	pkt        PacketInfo
+	payloadLen int
 }
 
 func getProcessActionEventTests() []processActionEventTest {
-	tests := make([]processActionEventTest, 0, 3)
-	tests = append(tests, getRedirectedActionTest())
-	tests = append(tests, getBlockedActionTest())
-	tests = append(tests, getAllowedActionTest())
-
-	return tests
-}
-
-func getRedirectedActionTest() processActionEventTest {
-	return processActionEventTest{
-		name:            "redirected action",
-		action:          "REDIRECTED",
-		flowID:          "test-flow-1",
-		src:             "192.168.1.1:80",
-		dst:             "192.168.1.2:8080",
-		proto:           "TCP",
-		sourceIP:        "192.168.1.1",
-		destinationIP:   "192.168.1.2",
-		sourcePort:      80,
-		destinationPort: 8080,
-		payloadLen:      1500,
-	}
-}
-
-func getBlockedActionTest() processActionEventTest {
-	return processActionEventTest{
-		name:            "blocked action",
-		action:          "BLOCKED",
-		flowID:          "test-flow-2",
-		src:             "192.168.1.1:53",
-		dst:             "8.8.8.8:53",
-		proto:           "UDP",
-		sourceIP:        "192.168.1.1",
-		destinationIP:   "8.8.8.8",
-		sourcePort:      53,
-		destinationPort: 53,
-		payloadLen:      512,
-	}
-}
-
-func getAllowedActionTest() processActionEventTest {
-	return processActionEventTest{
-		name:            "allowed action",
-		action:          "ALLOWED",
-		flowID:          "",
-		src:             "10.0.0.1",
-		dst:             "10.0.0.2",
-		proto:           "ICMP",
-		sourceIP:        "10.0.0.1",
-		destinationIP:   "10.0.0.2",
-		sourcePort:      0,
-		destinationPort: 0,
-		payloadLen:      64,
+	return []processActionEventTest{
+		{
+			name:   "redirected action",
+			action: "REDIRECTED",
+			flowID: "test-flow-1",
+			pkt: PacketInfo{
+				Src: "192.168.1.1:80", Dst: "192.168.1.2:8080",
+				Protocol: "TCP", SourceIP: "192.168.1.1", DestinationIP: "192.168.1.2",
+				SourcePort: 80, DestinationPort: 8080,
+			},
+			payloadLen: 1500,
+		},
+		{
+			name:   "blocked action",
+			action: "BLOCKED",
+			flowID: "test-flow-2",
+			pkt: PacketInfo{
+				Src: "192.168.1.1:53", Dst: "8.8.8.8:53",
+				Protocol: "UDP", SourceIP: "192.168.1.1", DestinationIP: "8.8.8.8",
+				SourcePort: 53, DestinationPort: 53,
+			},
+			payloadLen: 512,
+		},
+		{
+			name:   "allowed action",
+			action: "ALLOWED",
+			pkt: PacketInfo{
+				Src: "10.0.0.1", Dst: "10.0.0.2",
+				Protocol: "ICMP", SourceIP: "10.0.0.1", DestinationIP: "10.0.0.2",
+			},
+			payloadLen: 64,
+		},
 	}
 }

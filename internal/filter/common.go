@@ -69,23 +69,31 @@ func normalizeDomain(domain string) string {
 	return ascii
 }
 
-// allowedHost checks if a host matches the allowlist patterns.
+// NormalizePatterns pre-normalizes a list of domain patterns for use with allowedHost.
+func NormalizePatterns(patterns []string) []string {
+	out := make([]string, len(patterns))
+	for i, p := range patterns {
+		out[i] = normalizeDomain(p)
+	}
+
+	return out
+}
+
+// allowedHost checks if a host matches the pre-normalized allowlist patterns.
 func allowedHost(host string, allowlist []string) bool {
 	host = normalizeDomain(host)
 
 	for _, pattern := range allowlist {
-		normalizedPattern := normalizeDomain(pattern)
-
-		if normalizedPattern == "*" {
+		if pattern == "*" {
 			return true
 		}
 
-		if strings.HasPrefix(normalizedPattern, "*.") {
-			suffix := normalizedPattern[1:] // e.g. ".google.com"
+		if strings.HasPrefix(pattern, "*.") {
+			suffix := pattern[1:] // e.g. ".google.com"
 			if strings.HasSuffix(host, suffix) && len(host) > len(suffix) {
 				return true
 			}
-		} else if host == normalizedPattern {
+		} else if host == pattern {
 			return true
 		}
 	}
@@ -325,13 +333,17 @@ func sourceAddr(conn net.Conn) (string, int) {
 var (
 	// recentSynthetic stores flow_id -> timestamp of last synthetic event to dedupe nflog events.
 	recentSynthetic = struct {
-		m     map[string]time.Time
-		mutex sync.Mutex
+		m      map[string]time.Time
+		mutex  sync.Mutex
+		writes int
 	}{m: make(map[string]time.Time)}
 )
 
 // suppressWindow is how long to suppress kernel nflog events after seeing a synthetic redirect.
 const suppressWindow = 5 * time.Second
+
+// pruneInterval controls how many writes between prune sweeps.
+const pruneInterval = 64
 
 // MarkSynthetic records that a synthetic log event was emitted for this flow to prevent duplicate nflog events.
 func MarkSynthetic(flowID string) {
@@ -343,11 +355,16 @@ func MarkSynthetic(flowID string) {
 	defer recentSynthetic.mutex.Unlock()
 
 	recentSynthetic.m[flowID] = time.Now()
-	// prune old entries occasionally
-	cutoff := time.Now().Add(-suppressWindow * 4)
-	for k, v := range recentSynthetic.m {
-		if v.Before(cutoff) {
-			delete(recentSynthetic.m, k)
+	recentSynthetic.writes++
+
+	if recentSynthetic.writes >= pruneInterval {
+		recentSynthetic.writes = 0
+
+		cutoff := time.Now().Add(-suppressWindow * 4)
+		for k, v := range recentSynthetic.m {
+			if v.Before(cutoff) {
+				delete(recentSynthetic.m, k)
+			}
 		}
 	}
 }
@@ -379,7 +396,6 @@ func EmitSynthetic(logger *slog.Logger, component string, conn net.Conn, target 
 
 	flowID := FlowID(sourceIP, sourcePort, destIP, destPort, "tcp")
 	logger.Debug("nflog.synthetic",
-		"time", time.Now().UTC().Format(time.RFC3339Nano),
 		"component", component,
 		"action", ActionRedirected,
 		"protocol", "TCP",
@@ -406,7 +422,6 @@ func EmitSyntheticUDP(logger *slog.Logger, component, sourceIP string, sourcePor
 	destIP, destPort := parseHostPort(dst)
 	flowID := FlowID(sourceIP, sourcePort, destIP, destPort, "udp")
 	logger.Debug("nflog.synthetic",
-		"time", time.Now().UTC().Format(time.RFC3339Nano),
 		"component", component,
 		"action", ActionRedirected,
 		"protocol", "UDP",
@@ -535,7 +550,6 @@ func logBlockedConnection(
 	}
 
 	fields := []any{
-		"time", time.Now().UTC().Format(time.RFC3339Nano),
 		"component", component,
 		"action", "BLOCKED",
 		identifierKey, identifier,
