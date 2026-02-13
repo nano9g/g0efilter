@@ -134,25 +134,27 @@ jobs:
 
           echo "=== Remote unblock: google.com ==="
 
-          echo "[Unblock] Create request for google.com"
+          echo "[Unblock] Create request for google.com targeting host-01"
           CREATE=$(run_curl "curl -sf -X POST $API/unblocks \
             -H 'Content-Type: application/json' \
-            -d '{\"type\":\"domain\",\"value\":\"google.com\"}'")
+            -d '{\"type\":\"domain\",\"value\":\"google.com\",\"target_hostname\":\"host-01\"}'")
           echo "$CREATE" | grep -q '"status":"pending"' \
             || { echo "ERROR: create failed: $CREATE"; exit 1; }
           ID=$(echo "$CREATE" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
           [ -n "$ID" ] || { echo "ERROR: no id returned"; exit 1; }
           echo "OK: created id=$ID"
 
-          echo "[Unblock] Status shows google.com in pending"
+          echo "[Unblock] Status shows google.com in pending with target_hostname"
           STATUS=$(run_curl "curl -sf $API/unblocks/status")
           echo "$STATUS" | grep -q '"pending"' \
             || { echo "ERROR: no pending array in status response"; exit 1; }
           echo "$STATUS" | grep -q '"google.com"' \
             || { echo "ERROR: google.com not in status"; exit 1; }
-          echo "OK: google.com in pending"
+          echo "$STATUS" | grep -q '"target_hostname":"host-01"' \
+            || { echo "ERROR: target_hostname not in pending status"; exit 1; }
+          echo "OK: google.com in pending for host-01"
 
-          echo "[Unblock] Waiting for g0efilter to poll and apply unblock..."
+          echo "[Unblock] Waiting for g0efilter (host-01) to poll and apply unblock..."
           for i in $(seq 1 15); do
             STATUS_NOW=$(run_curl "curl -sf $API/unblocks/status")
             if echo "$STATUS_NOW" | grep -q '"pending":\[\]'; then
@@ -167,6 +169,12 @@ jobs:
             fi
             sleep 5
           done
+
+          echo "[Unblock] Verify completed entry preserves target_hostname"
+          COMPLETED_STATUS=$(run_curl "curl -sf $API/unblocks/status")
+          echo "$COMPLETED_STATUS" | grep -q '"target_hostname":"host-01"' \
+            || { echo "ERROR: target_hostname not preserved in completed"; echo "$COMPLETED_STATUS"; exit 1; }
+          echo "OK: completed entry has target_hostname=host-01"
 
           echo "[Unblock] Verify google.com added to policy.yaml"
           grep -q 'google.com' policy.yaml \

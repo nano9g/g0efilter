@@ -20,9 +20,10 @@ type UnblockRequest struct {
 //
 //nolint:tagliatelle // JSON uses snake_case for API compatibility
 type CompletedUnblock struct {
-	Type        string    `json:"type"`
-	Value       string    `json:"value"`
-	CompletedAt time.Time `json:"completed_at"`
+	Type           string    `json:"type"`
+	Value          string    `json:"value"`
+	TargetHostname string    `json:"target_hostname"`
+	CompletedAt    time.Time `json:"completed_at"`
 }
 
 // UnblockStore manages pending unblock requests with thread-safe operations.
@@ -127,9 +128,10 @@ func (s *memUnblockStore) Acknowledge(id string) bool {
 	if exists {
 		// Move to completed list
 		s.completed = append(s.completed, CompletedUnblock{
-			Type:        req.Type,
-			Value:       req.Value,
-			CompletedAt: time.Now().UTC(),
+			Type:           req.Type,
+			Value:          req.Value,
+			TargetHostname: req.TargetHostname,
+			CompletedAt:    time.Now().UTC(),
 		})
 		delete(s.requests, id)
 
