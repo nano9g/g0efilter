@@ -2,8 +2,8 @@
 var LIVE = JSON.parse(localStorage.getItem('autoRefresh') || 'true');
 var VIEW = localStorage.getItem('view') || 'stream';
 var MAX_ROWS = 2000;
-var pendingUnblocks = new Set(); // Track domains/IPs with pending unblock requests
-var completedUnblocks = new Set(); // Track domains/IPs that have been unblocked
+var pendingUnblocks = new Set(); // Track value\0target_hostname keys with pending unblock requests
+var completedUnblocks = new Set(); // Track value\0target_hostname keys that have been unblocked
 
 /* elements */
 var autoRefreshEl = document.getElementById('autoRefresh');
@@ -127,8 +127,9 @@ async function requestUnblock(type, value, targetHostname) {
     if (res.ok) {
       var target = targetHostname || 'all hosts';
       alert('Unblock request queued for: ' + value + ' (target: ' + target + ')');
-      // Track this value as pending and re-render to hide the button
-      pendingUnblocks.add(value.toLowerCase());
+      // Track this value+target as pending and re-render to hide the button
+      var target = targetHostname || '';
+      pendingUnblocks.add(value.toLowerCase() + '\0' + target.toLowerCase());
       renderStream(true);
     } else {
       var err = await res.json();
@@ -167,6 +168,14 @@ function jsStringEsc(value) {
   return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
+// Check if a value is in an unblock set for a given hostname.
+// Matches exact (value, hostname) pair OR (value, "") meaning all hosts.
+function isUnblocked(set, value, hostname) {
+  var v = value.toLowerCase();
+  var h = (hostname || '').toLowerCase();
+  return set.has(v + '\0' + h) || set.has(v + '\0');
+}
+
 function rowHTML(it){
   var act  = getAction(it);
   var comp = getComp(it) || (it.component||'');
@@ -185,19 +194,18 @@ function rowHTML(it){
   if (act === 'BLOCKED') {
     var escapedHn = jsStringEsc(hn);
     if (host) {
-      var hostLower = host.toLowerCase();
-      if (completedUnblocks.has(hostLower)) {
+      if (isUnblocked(completedUnblocks, host, hn)) {
         unblockBtn = '<span class="unblock-done">Unblocked</span>';
-      } else if (pendingUnblocks.has(hostLower)) {
+      } else if (isUnblocked(pendingUnblocks, host, hn)) {
         unblockBtn = '<span class="unblock-pending">Pending</span>';
       } else {
         unblockBtn = '<button class="unblock-btn" onclick="unblockDomain(\''+jsStringEsc(host)+'\', \''+escapedHn+'\')">Unblock Domain</button>';
       }
     } else if (dst) {
-      var cleanDst = dst.split(':')[0].toLowerCase();
-      if (completedUnblocks.has(cleanDst)) {
+      var cleanDst = dst.split(':')[0];
+      if (isUnblocked(completedUnblocks, cleanDst, hn)) {
         unblockBtn = '<span class="unblock-done">Unblocked</span>';
-      } else if (pendingUnblocks.has(cleanDst)) {
+      } else if (isUnblocked(pendingUnblocks, cleanDst, hn)) {
         unblockBtn = '<span class="unblock-pending">Pending</span>';
       } else {
         unblockBtn = '<button class="unblock-btn" onclick="unblockIP(\''+jsStringEsc(dst)+'\', \''+escapedHn+'\')">Unblock IP</button>';
@@ -337,21 +345,23 @@ async function loadUnblockStatus(){
     
     var changed = false;
     
-    // Update pending set
+    // Update pending set (keyed by value\0target_hostname)
     var newPending = new Set();
     if (data.pending) {
       for (var i = 0; i < data.pending.length; i++) {
-        newPending.add(data.pending[i].value.toLowerCase());
+        var p = data.pending[i];
+        newPending.add(p.value.toLowerCase() + '\0' + (p.target_hostname || '').toLowerCase());
       }
     }
     if (newPending.size !== pendingUnblocks.size) changed = true;
     pendingUnblocks = newPending;
-    
-    // Update completed set
+
+    // Update completed set (keyed by value\0target_hostname)
     var newCompleted = new Set();
     if (data.completed) {
       for (var j = 0; j < data.completed.length; j++) {
-        newCompleted.add(data.completed[j].value.toLowerCase());
+        var c = data.completed[j];
+        newCompleted.add(c.value.toLowerCase() + '\0' + (c.target_hostname || '').toLowerCase());
       }
     }
     if (newCompleted.size !== completedUnblocks.size) changed = true;

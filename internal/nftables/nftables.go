@@ -170,6 +170,9 @@ table ip g0efilter_v4 {
         # Always allow loopback-bound traffic
         oifname "lo" accept
 
+		# Drop traffic to 0.0.0.0 (prevents sinkhole bypass via loopback)
+		ip daddr 0.0.0.0 drop
+
         # Allow already established connections
         ct state established,related accept
 
@@ -206,6 +209,9 @@ table ip g0efilter_v4 {
 
         # Always allow loopback-bound traffic
         oifname "lo" accept
+
+		# Drop traffic to 0.0.0.0 (prevents sinkhole bypass via loopback)
+		ip daddr 0.0.0.0 drop
 
         # Allow local proxies on 127.0.0.1
         ip daddr 127.0.0.1 tcp dport %d accept    # HTTP proxy
