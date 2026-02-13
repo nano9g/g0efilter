@@ -304,6 +304,7 @@ func getHTTPSModeTests() []struct {
 				"tcp dport 443",
 				"redirect to :8080",
 				"redirect to :8443",
+				"ip daddr 0.0.0.0 drop",
 			},
 		},
 	}
@@ -341,6 +342,7 @@ func getDNSModeTests() []struct {
 				"udp dport 53",
 				"tcp dport 53",
 				"redirect to :5353",
+				"ip daddr 0.0.0.0 drop",
 			},
 		},
 	}
