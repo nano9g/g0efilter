@@ -155,7 +155,7 @@ func ApplyNftRules(allowlist []string, httpsPortStr, httpPortStr, dnsPortStr str
 }
 
 // generateDNSFilterRules creates nftables filter rules for DNS mode that block non-allowlisted traffic.
-func generateDNSFilterRules(allowSet string) string {
+func generateDNSFilterRules(allowSet string, dnsPort int) string {
 	return fmt.Sprintf(`
 table ip g0efilter_v4 {
     set allow_daddr_v4 {
@@ -167,8 +167,8 @@ table ip g0efilter_v4 {
     chain egress_allowlist_v4 {
         type filter hook output priority filter; policy accept;
 
-        # Drop traffic to 0.0.0.0 (prevents sinkhole bypass via loopback)
-        ip daddr 0.0.0.0 drop
+        # Always allow loopback-bound traffic
+        oifname "lo" accept
 
         # Allow already established connections
         ct state established,related accept
@@ -176,8 +176,9 @@ table ip g0efilter_v4 {
         # Bypass marked traffic (SO_MARK=0x1)
         meta mark 0x1 accept
 
-        # Allow loopback-bound traffic
-        oifname "lo" accept
+        # Allow local DNS proxy on loopback
+        ip daddr 127.0.0.1 udp dport %d accept
+        ip daddr 127.0.0.1 tcp dport %d accept
 
         # Allow ping to allow-listed destinations
         icmp type echo-request ip daddr @allow_daddr_v4 accept
@@ -187,11 +188,11 @@ table ip g0efilter_v4 {
         udp dport 853 drop
     }
 }
-`, allowSet)
+`, allowSet, dnsPort, dnsPort)
 }
 
 // generateHTTPSFilterRules creates nftables filter rules for HTTPS mode with logging and allowlist enforcement.
-func generateHTTPSFilterRules(allowSet string) string {
+func generateHTTPSFilterRules(allowSet string, httpPort, httpsPort int) string {
 	return fmt.Sprintf(`
 table ip g0efilter_v4 {
     set allow_daddr_v4 {
@@ -203,20 +204,24 @@ table ip g0efilter_v4 {
     chain egress_allowlist_v4 {
         type filter hook output priority filter; policy drop;
 
-        # Drop traffic to 0.0.0.0 (prevents sinkhole bypass via loopback)
-        ip daddr 0.0.0.0 drop
+        # Always allow loopback-bound traffic
+        oifname "lo" accept
+
+		# Drop traffic to 0.0.0.0 (prevents sinkhole bypass via loopback)
+		ip daddr 0.0.0.0 drop
+
+        # Allow local proxies on 127.0.0.1
+        ip daddr 127.0.0.1 tcp dport %d accept    # HTTP proxy
+        ip daddr 127.0.0.1 tcp dport %d accept    # HTTPS proxy
+
+        # Allow ping to allow-listed destinations
+        icmp type echo-request ip daddr @allow_daddr_v4 accept
 
         # Allow already established connections
         ct state established,related accept
 
         # Bypass marked traffic (SO_MARK=0x1)
         meta mark 0x1 accept
-
-        # Allow loopback-bound traffic
-        oifname "lo" accept
-
-        # Allow ping to allow-listed destinations
-        icmp type echo-request ip daddr @allow_daddr_v4 accept
 
         # Allow and log allow-listed destinations
         ip daddr @allow_daddr_v4 log prefix "allowed" group 0
@@ -227,7 +232,7 @@ table ip g0efilter_v4 {
         drop
     }
 }
-`, allowSet)
+`, allowSet, httpPort, httpsPort)
 }
 
 // generateDNSNATRules creates nftables NAT rules that redirect all DNS traffic to the local DNS proxy.
@@ -304,9 +309,9 @@ func GenerateNftRuleset(allowlist []string, httpsPort, httpPort, dnsPort int, mo
 
 	var filterRules string
 	if mode == filter.ModeDNS {
-		filterRules = generateDNSFilterRules(allowSet)
+		filterRules = generateDNSFilterRules(allowSet, dnsPort)
 	} else {
-		filterRules = generateHTTPSFilterRules(allowSet)
+		filterRules = generateHTTPSFilterRules(allowSet, httpPort, httpsPort)
 	}
 
 	var natRules string
