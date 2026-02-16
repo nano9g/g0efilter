@@ -299,12 +299,12 @@ func getHTTPSModeTests() []struct {
 			expectedContains: []string{
 				"table ip g0efilter_v4",
 				"table ip g0efilter_nat_v4",
+				"table ip6 g0efilter_v6",
 				"allow_daddr_v4",
 				"tcp dport 80",
 				"tcp dport 443",
 				"redirect to :8080",
 				"redirect to :8443",
-				"ip daddr 0.0.0.0 drop",
 			},
 		},
 	}
@@ -342,7 +342,6 @@ func getDNSModeTests() []struct {
 				"udp dport 53",
 				"tcp dport 53",
 				"redirect to :5353",
-				"ip daddr 0.0.0.0 drop",
 			},
 		},
 	}
@@ -376,6 +375,7 @@ func getDefaultModeTests() []struct {
 			expectedContains: []string{
 				"table ip g0efilter_v4",
 				"table ip g0efilter_nat_v4",
+				"table ip6 g0efilter_v6",
 				"tcp dport 80",
 				"tcp dport 443",
 			},

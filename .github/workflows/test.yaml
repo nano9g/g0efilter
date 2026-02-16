@@ -119,6 +119,26 @@ jobs:
             echo "[IP] Skipping blocked IP tests in DNS mode"
           fi
 
+      - name: "Phase 1.5: IPv6 egress blocked (https mode only)"
+        if: matrix.filter_mode == 'https'
+        working-directory: examples/build
+        run: |
+          set -e
+          COMPOSE="docker compose -f docker-compose-build.yaml"
+
+          echo "=== IPv6 egress filtering ==="
+
+          echo "[IPv6] Verify ip6 g0efilter_v6 table is loaded with policy drop"
+          $COMPOSE exec g0efilter nft list table ip6 g0efilter_v6 \
+            | grep -q "policy drop" \
+            || { echo "ERROR: ip6 g0efilter_v6 table not loaded or policy not drop"; exit 1; }
+          echo "OK: ip6 filter table loaded with policy drop"
+
+          echo "[IPv6] curl -6 should FAIL (IPv6 egress blocked)"
+          ! $COMPOSE exec tester sh -lc "curl -6 -sS --max-time 5 https://google.com -o /dev/null 2>&1" \
+            || { echo "ERROR: IPv6 connection succeeded but should be blocked"; exit 1; }
+          echo "OK: IPv6 egress blocked"
+
       - name: "Phase 2: Remote unblock → policy reload (${{ matrix.filter_mode }} mode)"
         working-directory: examples/build
         run: |
