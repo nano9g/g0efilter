@@ -8,6 +8,9 @@
 > [!WARNING]
 > g0efilter is in active development and its configuration may change often.
 
+> [!NOTE]
+> g0efilter currently supports IPv4 only. In HTTPS mode, IPv6 egress is blocked by default to prevent bypass.
+
 g0efilter is a lightweight container designed to filter outbound (egress) traffic from attached container workloads. Run g0efilter alongside your workloads and attach them to share its network namespace to enforce a simple IP and domain allowlist policy.
 
 ### Background
