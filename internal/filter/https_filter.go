@@ -235,7 +235,7 @@ func peekClientHello(reader io.Reader) (*tls.ClientHelloInfo, *bytes.Buffer, err
 // readClientHello captures TLS ClientHello info without completing the handshake.
 func readClientHello(r io.Reader) (*tls.ClientHelloInfo, error) {
 	var hello *tls.ClientHelloInfo
-	//nolint:gosec // TLS MinVersion intentionally low to capture ClientHello from older clients
+
 	err := tls.Server(roConn{r}, &tls.Config{
 		GetConfigForClient: func(ch *tls.ClientHelloInfo) (*tls.Config, error) {
 			cp := *ch

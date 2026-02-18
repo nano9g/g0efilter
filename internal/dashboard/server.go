@@ -23,7 +23,7 @@ import (
 // Config holds the dashboard server configuration.
 type Config struct {
 	Addr         string  // ":8081"
-	APIKey       string  // required for POST /api/v1/logs
+	APIKey       string  //nolint:gosec // config field, not a hardcoded secret
 	LogLevel     string  // "INFO"
 	BufferSize   int     // optional (default 5000)
 	ReadLimit    int     // optional (default 500)

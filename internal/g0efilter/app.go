@@ -624,7 +624,7 @@ func fileSHA256Hex(path string) (string, error) {
 		return "", errPolicyPathEmpty
 	}
 
-	f, err := os.Open(cleanPath)
+	f, err := os.Open(cleanPath) //nolint:gosec // path is filepath.Clean'd config value, not user input
 	if err != nil {
 		return "", fmt.Errorf("open %q: %w", cleanPath, err)
 	}
@@ -757,7 +757,7 @@ func fetchPendingUnblocks(
 		"has_api_key", cfg.dashboardAPIKey != "",
 	)
 
-	resp, err := client.Do(req)
+	resp, err := client.Do(req) //nolint:gosec // URL from internal dashboard config
 	if err != nil {
 		return nil, fmt.Errorf("send request: %w", err)
 	}
@@ -860,7 +860,7 @@ func acknowledgeUnblock(ctx context.Context, client *http.Client, baseURL, apiKe
 	req.Header.Set("X-Api-Key", apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := client.Do(req)
+	resp, err := client.Do(req) //nolint:gosec // URL from internal dashboard config
 	if err != nil {
 		return fmt.Errorf("send ack request: %w", err)
 	}

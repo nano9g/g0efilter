@@ -137,7 +137,7 @@ type RequestData struct {
 	Method      string
 	ContentType string
 	FormValues  map[string]string
-	AuthToken   string // For X-Gotify-Key header
+	AuthToken   string //nolint:gosec // test struct, not a real secret
 	UserAgent   string
 }
 
