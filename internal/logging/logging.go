@@ -236,7 +236,7 @@ func (p *poster) Probe(ctx context.Context) error {
 	req.Header.Set("Content-Type", "application/json")
 	setAPIAuthHeaders(req.Header, p.apiKey)
 
-	resp, err := p.httpC.Do(req)
+	resp, err := p.httpC.Do(req) //nolint:gosec // URL is from internal dashboard config, not user input
 	if err != nil {
 		return fmt.Errorf("failed to execute probe request: %w", err)
 	}
@@ -338,7 +338,7 @@ func (p *poster) attemptPost(ctx context.Context, payload []byte) bool {
 	req.Header.Set("Content-Type", "application/json")
 	setAPIAuthHeaders(req.Header, p.apiKey)
 
-	resp, err := p.httpC.Do(req)
+	resp, err := p.httpC.Do(req) //nolint:gosec // URL is from internal dashboard config, not user input
 
 	// Check if we should retry
 	if !shouldRetry(resp, err) {

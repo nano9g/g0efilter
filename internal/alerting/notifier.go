@@ -333,7 +333,7 @@ func (n *Notifier) sendNotification(ctx context.Context, info BlockedConnectionI
 	}
 
 	// Send notification
-	resp, err := n.client.Do(req)
+	resp, err := n.client.Do(req) //nolint:gosec // URL is from internal Gotify config, not user input
 	if err != nil {
 		return // Silently fail
 	}

@@ -335,6 +335,7 @@ func deleteTableIfExists(ctx context.Context, family, table string) error {
 	ctxProbe, cancelProbe := context.WithTimeout(ctx, 5*time.Second)
 	defer cancelProbe()
 
+	//nolint:gosec // args are hardcoded literals from callers
 	probe := exec.CommandContext(ctxProbe, "nft", "list", "table", family, table)
 
 	err := probe.Run()
@@ -345,6 +346,7 @@ func deleteTableIfExists(ctx context.Context, family, table string) error {
 	ctxDel, cancelDel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancelDel()
 
+	//nolint:gosec // args are hardcoded literals from callers
 	del := exec.CommandContext(ctxDel, "nft", "delete", "table", family, table)
 
 	err = del.Run()
