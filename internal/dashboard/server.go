@@ -187,6 +187,7 @@ func (s *Server) routes() http.Handler {
 	// Global middleware stack
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
+	r.Use(s.securityHeadersMiddleware())
 	r.Use(s.loggerMiddleware())
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(60 * time.Second))
@@ -196,12 +197,12 @@ func (s *Server) routes() http.Handler {
 
 	// API v1 routes
 	r.Route("/api/v1", func(r chi.Router) {
-		// Public endpoints (protected by reverse proxy middleware auth)
-		r.Get("/logs", s.listLogsHandler)
-		r.Get("/events", s.sseHandler)
-		r.Delete("/logs", s.clearLogsHandler)
-		r.Post("/unblocks", s.createUnblockHandler)       // Admin creates unblock requests
-		r.Get("/unblocks/status", s.unblockStatusHandler) // UI polls for pending/completed status
+		// UI endpoints (protected by reverse proxy auth middleware in production)
+		r.Get("/logs", s.listLogsHandler)           // sensitive: exposes traffic logs
+		r.Get("/events", s.sseHandler)              // sensitive: streams live traffic data
+		r.Delete("/logs", s.clearLogsHandler)       // sensitive: destructive - clears all logs
+		r.Post("/unblocks", s.createUnblockHandler) // sensitive: queues firewall policy changes
+		r.Get("/unblocks/status", s.unblockStatusHandler)
 
 		// Unblock polling endpoints (require API key - used by g0efilter instances)
 		r.Group(func(r chi.Router) {
@@ -223,6 +224,32 @@ func (s *Server) routes() http.Handler {
 	r.Mount("/", IndexHandler())
 
 	return r
+}
+
+// securityHeadersMiddleware sets standard HTTP security headers on every response.
+// CSP requires 'unsafe-inline' for both script-src and style-src because:
+//   - index.html uses inline style= on <col> elements (column widths) and aggView display:none
+//   - app.js builds table rows via innerHTML with onclick= handlers (rowHTML)
+//
+// A future refactor to event delegation would allow removing 'unsafe-inline' from script-src.
+// In production these headers may be overridden or supplemented by the reverse proxy (e.g. Traefik).
+func (s *Server) securityHeadersMiddleware() func(http.Handler) http.Handler {
+	const csp = "default-src 'self'; " +
+		"script-src 'self' 'unsafe-inline'; " +
+		"style-src 'self' 'unsafe-inline'; " +
+		"img-src 'self' data:; " +
+		"connect-src 'self'; " +
+		"frame-ancestors 'none'"
+
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Security-Policy", csp)
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			w.Header().Set("X-Frame-Options", "DENY")
+			w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 // loggerMiddleware logs HTTP requests with structured logging.

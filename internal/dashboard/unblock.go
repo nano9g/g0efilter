@@ -1,6 +1,8 @@
 package dashboard
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"sync"
 	"time"
 )
@@ -45,7 +47,6 @@ type memUnblockStore struct {
 	mu         sync.RWMutex
 	requests   map[string]UnblockRequest
 	completed  []CompletedUnblock
-	counter    int64
 	maxPending int
 }
 
@@ -75,8 +76,7 @@ func (s *memUnblockStore) Add(reqType, value, targetHostname string) string {
 		return ""
 	}
 
-	s.counter++
-	id := generateID(s.counter)
+	id := generateID()
 
 	s.requests[id] = UnblockRequest{
 		ID:             id,
@@ -158,20 +158,10 @@ func (s *memUnblockStore) GetCompleted() []CompletedUnblock {
 	return result
 }
 
-// generateID creates a unique ID for an unblock request.
-func generateID(counter int64) string {
-	const chars = "abcdefghijklmnopqrstuvwxyz0123456789"
+// generateID creates a cryptographically random 16-character hex ID for an unblock request.
+func generateID() string {
+	b := make([]byte, 8)
+	_, _ = rand.Read(b) // crypto/rand.Read never errors on Linux (Go 1.20+)
 
-	timestamp := time.Now().UnixNano()
-
-	// Simple ID: base36-ish encoding of timestamp + counter
-	combined := timestamp + counter
-	id := make([]byte, 12)
-
-	for i := range id {
-		id[i] = chars[combined%int64(len(chars))]
-		combined /= int64(len(chars))
-	}
-
-	return string(id)
+	return hex.EncodeToString(b)
 }

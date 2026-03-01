@@ -51,7 +51,10 @@ searchEl.addEventListener('input', applyFilters);
 
 document.getElementById('clearBtn').onclick = async function(){
   if(!confirm('Clear all logs?')) return;
-  await fetch('/api/v1/logs', {method:'DELETE'});
+  var apiKey = localStorage.getItem('apiKey') || '';
+  var clearHeaders = {};
+  if (apiKey) clearHeaders['X-Api-Key'] = apiKey;
+  await fetch('/api/v1/logs', {method:'DELETE', headers: clearHeaders});
   streamBody.innerHTML=''; allItems.length=0; renderAgg();
 };
 autoRefreshEl.addEventListener('change', function(){
@@ -96,18 +99,25 @@ function sanitizeInput(s){
 }
 
 function matches(it){
-  var aSel=sanitizeInput(actionEl.value||'').toUpperCase();
-  var cSel=sanitizeInput(compEl.value||'').toLowerCase();
-  var q=sanitizeInput(searchEl.value||'').toLowerCase();
-  var act=getAction(it); if(aSel && act!==aSel) return false;
-  var comp=getComp(it); if(cSel && comp!==cSel) return false;
-  if(!q) return true;
+  var act=getAction(it); if(filterAction && act!==filterAction) return false;
+  var comp=getComp(it); if(filterComp && comp!==filterComp) return false;
+  if(!filterQuery) return true;
   var hay=[act, comp, hostOf(it), srcOf(it), dstOf(it), hostnameOf(it), flowIdOf(it), versionOf(it)].join(' ').toLowerCase();
-  return hay.indexOf(q)!==-1;
+  return hay.indexOf(filterQuery)!==-1;
 }
 
 /* --- stream --- */
 var allItems=[];
+
+/* filter cache — updated once per render pass instead of re-reading DOM on every row */
+var filterAction='';
+var filterComp='';
+var filterQuery='';
+function updateFilterCache(){
+  filterAction=sanitizeInput(actionEl.value||'').toUpperCase();
+  filterComp=sanitizeInput(compEl.value||'').toLowerCase();
+  filterQuery=sanitizeInput(searchEl.value||'').toLowerCase();
+}
 
 /* --- unblock helpers --- */
 async function requestUnblock(type, value, targetHostname) {
@@ -125,11 +135,11 @@ async function requestUnblock(type, value, targetHostname) {
       body: JSON.stringify(body)
     });
     if (res.ok) {
-      var target = targetHostname || 'all hosts';
-      alert('Unblock request queued for: ' + value + ' (target: ' + target + ')');
+      var displayTarget = targetHostname || 'all hosts';
+      alert('Unblock request queued for: ' + value + ' (target: ' + displayTarget + ')');
       // Track this value+target as pending and re-render to hide the button
-      var target = targetHostname || '';
-      pendingUnblocks.add(value.toLowerCase() + '\0' + target.toLowerCase());
+      var storeTarget = targetHostname || '';
+      pendingUnblocks.add(value.toLowerCase() + '\0' + storeTarget.toLowerCase());
       renderStream(true);
     } else {
       var err = await res.json();
@@ -238,6 +248,7 @@ function rowHTML(it){
   '</tr>';
 }
 function renderStream(replace){
+  updateFilterCache();
   var out='';
   for(var i=0;i<allItems.length;i++){
     var it=allItems[i];
@@ -247,13 +258,13 @@ function renderStream(replace){
   if(replace){ streamBody.innerHTML=out; } else if(out){ streamBody.insertAdjacentHTML('afterbegin', out); }
 }
 
-/* --- aggregates (simplified) --- */
+/* --- aggregates --- */
 function renderAgg(){
-  // key -> { total, lastSeen }
+  updateFilterCache();
+  // Single O(n) pass: accumulate totals and per-action counts together
   var map=new Map();
 
   function keyFor(it){
-    // Prefer HTTPS/Host, then DNS name, else destination(IP:port) or IP
     var key = hostOf(it);
     if(!key) key = dstOf(it);
     return key || '';
@@ -263,39 +274,27 @@ function renderAgg(){
     var it=allItems[i]; if(!matches(it)) continue;
     var key=keyFor(it); if(!key) continue;
     var rec = map.get(key);
-    if(!rec){ rec={ total:0, lastSeen:0 }; map.set(key, rec); }
+    if(!rec){ rec={ total:0, lastSeen:0, allowed:0, blocked:0 }; map.set(key, rec); }
     rec.total++;
     var t=new Date(it.time||it.ts||Date.now()).getTime();
     if(t>rec.lastSeen) rec.lastSeen=t;
+    var action=getAction(it);
+    if(action==='ALLOWED') rec.allowed++; else if(action==='BLOCKED') rec.blocked++;
   }
 
   var rows=[];
-  map.forEach(function(v,k){ rows.push({key:k,total:v.total,lastSeen:v.lastSeen}); });
+  map.forEach(function(v,k){ rows.push({key:k,total:v.total,lastSeen:v.lastSeen,allowed:v.allowed,blocked:v.blocked}); });
 
-  // Sort by total desc, then lastSeen desc
   rows.sort(function(a,b){ return (b.total-a.total) || (b.lastSeen-a.lastSeen); });
 
   var html='';
   for(var r=0;r<rows.length;r++){
     var a=rows[r];
-    // pick the "dominant" action for this key: whichever had most hits
-    var act = '';
-    var actCounts = {ALLOWED:0, BLOCKED:0};
-    for(var j=0;j<allItems.length;j++){
-      var item=allItems[j];
-      if(!matches(item)) continue;
-      var itemKey=hostOf(item)||dstOf(item)||'';
-      if(itemKey!==a.key) continue;
-      var action = getAction(item);
-      if(actCounts[action]!==undefined){ actCounts[action]++; }
-    }
-    var max=0;
-    for(var k in actCounts){ if(actCounts[k]>max){ max=actCounts[k]; act=k; } }
-
+    var act = a.blocked >= a.allowed ? 'BLOCKED' : 'ALLOWED';
     html+='<tr>'+
-      '<td style="text-align:left">'+esc(a.key)+'</td>'+
+      '<td class="agg-key">'+esc(a.key)+'</td>'+
       '<td>'+a.total+'</td>'+
-      '<td>'+esc(act||'-')+'</td>'+
+      '<td>'+esc(act)+'</td>'+
       '<td>'+(a.lastSeen? esc(new Date(a.lastSeen).toLocaleString())+' <span style="opacity:.6">('+esc(rel(a.lastSeen))+' ago)</span>':'')+'</td>'+
     '</tr>';
   }
@@ -307,12 +306,17 @@ document.getElementById('aggRefresh').onclick=function(){ renderAgg(); };
 
 /* --- data load (backfill from memory store) --- */
 async function reload(){
-  var res = await fetch('/api/v1/logs?limit=500');
-  var items = await res.json();
-  for(var i=0;i<items.length;i++) items[i]=norm(items[i]);
-  allItems = items;
-  renderStream(true);
-  renderAgg();
+  try {
+    var res = await fetch('/api/v1/logs?limit=500');
+    if (!res.ok) { console.error('reload failed:', res.status); return; }
+    var items = await res.json();
+    for(var i=0;i<items.length;i++) items[i]=norm(items[i]);
+    allItems = items;
+    renderStream(true);
+    renderAgg();
+  } catch(e) {
+    console.error('reload error:', e);
+  }
 }
 
 /* --- SSE --- */
@@ -329,6 +333,7 @@ function connectSSE(){
       it = norm(it);
       allItems.unshift(it);
       if(allItems.length>MAX_ROWS) allItems.pop();
+      updateFilterCache();
       if(VIEW==='stream' && matches(it)){
         streamBody.insertAdjacentHTML('afterbegin', rowHTML(it));
       }

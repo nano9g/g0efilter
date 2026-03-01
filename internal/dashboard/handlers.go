@@ -344,7 +344,7 @@ func (s *Server) listUnblocksHandler(w http.ResponseWriter, r *http.Request) {
 
 // createUnblockHandler handles POST /api/v1/unblocks requests.
 //
-//nolint:tagliatelle // JSON uses snake_case for API compatibility
+//nolint:funlen,tagliatelle // JSON uses snake_case for API compatibility
 func (s *Server) createUnblockHandler(w http.ResponseWriter, r *http.Request) {
 	const maxBody = 4096 // 4 KiB — small JSON payload
 
@@ -378,7 +378,13 @@ func (s *Server) createUnblockHandler(w http.ResponseWriter, r *http.Request) {
 		s.logger.Debug("unblocks.create.invalid_value",
 			"remote", r.RemoteAddr, "type", req.Type, "value", req.Value, "reason", errMsg,
 		)
-		http.Error(w, `{"error":"`+errMsg+`"}`, http.StatusBadRequest)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+
+		err := json.NewEncoder(w).Encode(map[string]string{"error": errMsg})
+		if err != nil {
+			s.logger.Error("failed to encode unblock error response", "error", err)
+		}
 
 		return
 	}
