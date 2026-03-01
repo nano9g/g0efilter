@@ -129,8 +129,8 @@ allowlist:
 | `PORT`          | Address/port the dashboard listens on (HTTP UI + API). Can be just a port (`8081`) or address+port (`:8081`)     | `:8081` |
 | `API_KEY`       | API key used to authenticate incoming log data from the `g0efilter` container. Must match `DASHBOARD_API_KEY`    | unset   |
 | `LOG_LEVEL`     | Log level (TRACE, DEBUG, INFO, WARN, ERROR)                                                                       | `INFO`  |
-| `BUFFER_SIZE`   | In-memory buffer size for events. Controls how many events can be queued before dropping                          | `5000`  |
-| `READ_LIMIT`    | Maximum number of events returned per read/API request                                                            | `500`   |
+| `BUFFER_SIZE`   | In-memory circular buffer capacity. Oldest events are dropped when full                                           | `5000`  |
+| `READ_LIMIT`    | Maximum events returned per API request. Should match `BUFFER_SIZE` so the UI can backfill the full buffer        | `5000`  |
 | `SSE_RETRY_MS`  | Server-Sent Events (SSE) client retry interval in milliseconds                                                    | `2000`  |
 | `WRITE_TIMEOUT` | HTTP write timeout in seconds (0 = no timeout, recommended for SSE)                                               | `0`     |
 | `RATE_RPS`      | Maximum average requests per second (rate-limit)                                                                  | `50`    |
@@ -156,6 +156,7 @@ I would recommend to place the **g0efilter-dashboard** behind a reverse proxy su
 | `GET /api/v1/unblocks?hostname=X` | API Key | Poll pending unblock requests (used by g0efilter) |
 | `POST /api/v1/unblocks/ack` | API Key | Acknowledge processed unblock (used by g0efilter) |
 | `GET /` | Middleware | Dashboard web UI |
+| `GET /api/v1/config` | Middleware | Server configuration (buffer size, read limit) for UI |
 | `GET /api/v1/logs` | Middleware | Read logs |
 | `GET /api/v1/events` | Middleware | Server-Sent Events stream |
 | `DELETE /api/v1/logs` | Middleware | Clear logs |

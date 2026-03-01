@@ -26,7 +26,7 @@ type Config struct {
 	APIKey       string  //nolint:gosec // config field, not a hardcoded secret
 	LogLevel     string  // "INFO"
 	BufferSize   int     // optional (default 5000)
-	ReadLimit    int     // optional (default 500)
+	ReadLimit    int     // optional (default 5000)
 	SERetryMs    int     // optional (default 2000) - SSE client retry hint
 	RateRPS      float64 // optional (default 50)
 	RateBurst    float64 // optional (default 100)
@@ -42,6 +42,7 @@ type Server struct {
 	unblockStore UnblockStore     // Pending unblock requests
 	apiKey       string
 	readLimit    int
+	bufferSize   int
 	sseRetry     time.Duration
 	rateLimiter  RateLimiter // Interface instead of concrete *rateLimiter
 }
@@ -175,6 +176,7 @@ func newServer(lg *slog.Logger, cfg Config) *Server {
 		unblockStore: newUnblockStore(),
 		apiKey:       cfg.APIKey,
 		readLimit:    cfg.ReadLimit,
+		bufferSize:   cfg.BufferSize,
 		sseRetry:     time.Duration(cfg.SERetryMs) * time.Millisecond,
 		rateLimiter:  newRateLimiter(cfg.RateRPS, cfg.RateBurst),
 	}
@@ -198,6 +200,7 @@ func (s *Server) routes() http.Handler {
 	// API v1 routes
 	r.Route("/api/v1", func(r chi.Router) {
 		// UI endpoints (protected by reverse proxy auth middleware in production)
+		r.Get("/config", s.configHandler)           // public: exposes server config to UI
 		r.Get("/logs", s.listLogsHandler)           // sensitive: exposes traffic logs
 		r.Get("/events", s.sseHandler)              // sensitive: streams live traffic data
 		r.Delete("/logs", s.clearLogsHandler)       // sensitive: destructive - clears all logs

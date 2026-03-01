@@ -23,6 +23,20 @@ const (
    Handlers
    ========================= */
 
+// configHandler returns server configuration to the UI so client-side limits
+// stay in sync with the server's actual buffer size without hardcoding.
+func (s *Server) configHandler(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	err := json.NewEncoder(w).Encode(map[string]any{
+		"buffer_size": s.bufferSize,
+		"read_limit":  s.readLimit,
+	})
+	if err != nil {
+		s.logger.Error("failed to encode config response", "error", err)
+	}
+}
+
 // healthHandler handles health check requests.
 func (s *Server) healthHandler(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -143,7 +157,7 @@ func (s *Server) listLogsHandler(w http.ResponseWriter, r *http.Request) {
 	v2 := strings.TrimSpace(r.URL.Query().Get("limit"))
 	if v2 != "" {
 		n, err := strconv.Atoi(v2)
-		if err == nil && n > 0 && n <= 500 {
+		if err == nil && n > 0 && n <= 5000 {
 			limit = n
 		}
 	}

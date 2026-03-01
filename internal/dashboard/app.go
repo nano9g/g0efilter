@@ -23,7 +23,7 @@ const (
 	licenseType  = "MIT"
 
 	defaultBufferSize = 5000
-	defaultReadLimit  = 500
+	defaultReadLimit  = 5000
 	defaultSERetryMs  = 2000
 	defaultRateRPS    = 50.0
 	defaultRateBurst  = 100.0
