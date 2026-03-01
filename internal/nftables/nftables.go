@@ -318,31 +318,16 @@ table ip g0efilter_nat_v4 {
         # Return if allow-listed IP
         ip daddr @allow_daddr_v4 return
 
-        # Redirect HTTP (80) to local HTTP proxy unless allow-listed IP
+        # Redirect HTTP (80) to local HTTP proxy
         tcp dport 80  log prefix "redirected" group 0
-        tcp dport 80  ip daddr != @allow_daddr_v4 redirect to :%d
+        tcp dport 80  redirect to :%d
 
-        # Redirect HTTPS (443) to local HTTPS proxy unless allow-listed IP
+        # Redirect HTTPS (443) to local HTTPS proxy
         tcp dport 443 log prefix "redirected" group 0
-        tcp dport 443 ip daddr != @allow_daddr_v4 redirect to :%d
+        tcp dport 443 redirect to :%d
     }
 }
 `, allowSet, httpPort, httpsPort)
-}
-
-// generateIPv6DropAllRules creates nftables filter rules that block all IPv6 egress except loopback.
-// Used when no IPv6 addresses are in the allowlist.
-func generateIPv6DropAllRules() string {
-	return `
-table ip6 g0efilter_v6 {
-    chain egress_v6 {
-        type filter hook output priority filter; policy drop;
-
-        # Always allow loopback-bound traffic
-        oifname "lo" accept
-    }
-}
-`
 }
 
 // generateHTTPSFilterRulesV6 creates IPv6 nftables filter rules for HTTPS mode.
@@ -405,13 +390,13 @@ table ip6 g0efilter_nat_v6 {
         # Return if allow-listed IP
         ip6 daddr @allow_daddr_v6 return
 
-        # Redirect HTTP (80) to local HTTP proxy unless allow-listed IP
+        # Redirect HTTP (80) to local HTTP proxy
         tcp dport 80  log prefix "redirected" group 0
-        tcp dport 80  ip6 daddr != @allow_daddr_v6 redirect to :%d
+        tcp dport 80  redirect to :%d
 
-        # Redirect HTTPS (443) to local HTTPS proxy unless allow-listed IP
+        # Redirect HTTPS (443) to local HTTPS proxy
         tcp dport 443 log prefix "redirected" group 0
-        tcp dport 443 ip6 daddr != @allow_daddr_v6 redirect to :%d
+        tcp dport 443 redirect to :%d
     }
 }
 `, allowSet, httpPort, httpsPort)
@@ -506,20 +491,21 @@ func GenerateNftRuleset(v4, v6 []string, httpsPort, httpPort, dnsPort int, mode 
 
 	ruleset := filterRules + "\n" + natRules
 
-	// Generate IPv6 rules
-	if len(v6) > 0 {
-		allowSetV6 := strings.Join(v6, ", ")
+	// Generate IPv6 rules — always redirect port 80/443 through the proxy so
+	// domain-based filtering works even when a domain resolves to a AAAA record.
+	// If no explicit IPv6 IPs are allowlisted, use ::1 as the placeholder (same
+	// pattern as IPv4 using 127.0.0.1) so the set is never empty.
+	allowSetV6 := strings.Join(v6, ", ")
+	if allowSetV6 == "" {
+		allowSetV6 = "::1"
+	}
 
-		if mode == filter.ModeDNS {
-			ruleset += "\n" + generateDNSFilterRulesV6(allowSetV6, dnsPort)
-			ruleset += "\n" + generateDNSNATRulesV6(dnsPort)
-		} else {
-			ruleset += "\n" + generateHTTPSFilterRulesV6(allowSetV6, httpPort, httpsPort)
-			ruleset += "\n" + generateHTTPSNATRulesV6(allowSetV6, httpPort, httpsPort)
-		}
+	if mode == filter.ModeDNS {
+		ruleset += "\n" + generateDNSFilterRulesV6(allowSetV6, dnsPort)
+		ruleset += "\n" + generateDNSNATRulesV6(dnsPort)
 	} else {
-		// No IPv6 allowlist entries — drop all IPv6 egress (preserve existing behavior)
-		ruleset += "\n" + generateIPv6DropAllRules()
+		ruleset += "\n" + generateHTTPSFilterRulesV6(allowSetV6, httpPort, httpsPort)
+		ruleset += "\n" + generateHTTPSNATRulesV6(allowSetV6, httpPort, httpsPort)
 	}
 
 	return ruleset
