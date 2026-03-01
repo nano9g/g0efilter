@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/exec"
 	"strconv"
@@ -50,6 +51,46 @@ func parsePort(s, name string) (int, error) {
 	}
 
 	return port, nil
+}
+
+// splitByFamily partitions a flat IP/CIDR allowlist into IPv4 and IPv6 slices.
+func splitByFamily(allowlist []string) ([]string, []string) {
+	var v4, v6 []string
+
+	for _, entry := range allowlist {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+
+		if strings.Contains(entry, "/") {
+			_, ipnet, err := net.ParseCIDR(entry)
+			if err != nil {
+				continue
+			}
+
+			if ipnet.IP.To4() != nil {
+				v4 = append(v4, entry)
+			} else {
+				v6 = append(v6, entry)
+			}
+
+			continue
+		}
+
+		ip := net.ParseIP(entry)
+		if ip == nil {
+			continue
+		}
+
+		if ip.To4() != nil {
+			v4 = append(v4, entry)
+		} else {
+			v6 = append(v6, entry)
+		}
+	}
+
+	return v4, v6
 }
 
 // ApplyNftRulesAuto applies nftables rules using port numbers from environment variables or defaults.
@@ -133,7 +174,9 @@ func ApplyNftRulesWithContext(
 		return err
 	}
 
-	ruleset := GenerateNftRuleset(allowlist, httpsPort, httpPort, dnsPort, mode)
+	v4, v6 := splitByFamily(allowlist)
+
+	ruleset := GenerateNftRuleset(v4, v6, httpsPort, httpPort, dnsPort, mode)
 	if !strings.HasSuffix(ruleset, "\n") {
 		ruleset += "\n"
 	}
@@ -141,6 +184,7 @@ func ApplyNftRulesWithContext(
 	_ = deleteTableIfExists(ctx, "ip", "g0efilter_v4")
 	_ = deleteTableIfExists(ctx, "ip", "g0efilter_nat_v4")
 	_ = deleteTableIfExists(ctx, "ip6", "g0efilter_v6")
+	_ = deleteTableIfExists(ctx, "ip6", "g0efilter_nat_v6")
 
 	err = validateAndParseRuleset(ctx, ruleset)
 	if err != nil {
@@ -286,8 +330,9 @@ table ip g0efilter_nat_v4 {
 `, allowSet, httpPort, httpsPort)
 }
 
-// generateIPv6FilterRules creates nftables filter rules that block all IPv6 egress except loopback.
-func generateIPv6FilterRules() string {
+// generateIPv6DropAllRules creates nftables filter rules that block all IPv6 egress except loopback.
+// Used when no IPv6 addresses are in the allowlist.
+func generateIPv6DropAllRules() string {
 	return `
 table ip6 g0efilter_v6 {
     chain egress_v6 {
@@ -300,32 +345,181 @@ table ip6 g0efilter_v6 {
 `
 }
 
-// GenerateNftRuleset generates a complete nftables ruleset for the specified mode, ports, and allowlist.
-func GenerateNftRuleset(allowlist []string, httpsPort, httpPort, dnsPort int, mode string) string {
+// generateHTTPSFilterRulesV6 creates IPv6 nftables filter rules for HTTPS mode.
+func generateHTTPSFilterRulesV6(allowSet string, httpPort, httpsPort int) string {
+	return fmt.Sprintf(`
+table ip6 g0efilter_v6 {
+    set allow_daddr_v6 {
+        type ipv6_addr
+        flags interval
+        elements = {%s}
+    }
+
+    chain egress_allowlist_v6 {
+        type filter hook output priority filter; policy drop;
+
+        # Always allow loopback-bound traffic
+        oifname "lo" accept
+
+        # Allow already established connections
+        ct state established,related accept
+
+        # Bypass marked traffic (SO_MARK=0x1)
+        meta mark 0x1 accept
+
+        # Allow local proxies on ::1
+        ip6 daddr ::1 tcp dport %d accept    # HTTP proxy
+        ip6 daddr ::1 tcp dport %d accept    # HTTPS proxy
+
+        # Allow ping to allow-listed destinations
+        icmpv6 type echo-request ip6 daddr @allow_daddr_v6 accept
+
+        # Allow and log allow-listed destinations
+        ip6 daddr @allow_daddr_v6 log prefix "allowed" group 0
+        ip6 daddr @allow_daddr_v6 accept
+
+        # Log and drop everything else
+        log prefix "blocked" group 0
+        drop
+    }
+}
+`, allowSet, httpPort, httpsPort)
+}
+
+// generateHTTPSNATRulesV6 creates IPv6 nftables NAT rules for HTTPS mode.
+func generateHTTPSNATRulesV6(allowSet string, httpPort, httpsPort int) string {
+	return fmt.Sprintf(`
+table ip6 g0efilter_nat_v6 {
+    set allow_daddr_v6 {
+        type ipv6_addr
+        flags interval
+        elements = {%s}
+    }
+
+    chain output {
+        type nat hook output priority -100;
+
+        # Bypass marked traffic (SO_MARK=0x1)
+        meta mark 0x1 return
+
+        # Return if allow-listed IP
+        ip6 daddr @allow_daddr_v6 return
+
+        # Redirect HTTP (80) to local HTTP proxy unless allow-listed IP
+        tcp dport 80  log prefix "redirected" group 0
+        tcp dport 80  ip6 daddr != @allow_daddr_v6 redirect to :%d
+
+        # Redirect HTTPS (443) to local HTTPS proxy unless allow-listed IP
+        tcp dport 443 log prefix "redirected" group 0
+        tcp dport 443 ip6 daddr != @allow_daddr_v6 redirect to :%d
+    }
+}
+`, allowSet, httpPort, httpsPort)
+}
+
+// generateDNSFilterRulesV6 creates IPv6 nftables filter rules for DNS mode.
+func generateDNSFilterRulesV6(allowSet string, dnsPort int) string {
+	return fmt.Sprintf(`
+table ip6 g0efilter_v6 {
+    set allow_daddr_v6 {
+        type ipv6_addr
+        flags interval
+        elements = {%s}
+    }
+
+    chain egress_allowlist_v6 {
+        type filter hook output priority filter; policy accept;
+
+        # Always allow loopback-bound traffic
+        oifname "lo" accept
+
+        # Allow already established connections
+        ct state established,related accept
+
+        # Bypass marked traffic (SO_MARK=0x1)
+        meta mark 0x1 accept
+
+        # Allow local DNS proxy on loopback
+        ip6 daddr ::1 udp dport %d accept
+        ip6 daddr ::1 tcp dport %d accept
+
+        # Allow ping to allow-listed destinations
+        icmpv6 type echo-request ip6 daddr @allow_daddr_v6 accept
+    }
+}
+`, allowSet, dnsPort, dnsPort)
+}
+
+// generateDNSNATRulesV6 creates IPv6 nftables NAT rules for DNS mode.
+func generateDNSNATRulesV6(dnsPort int) string {
+	return fmt.Sprintf(`
+table ip6 g0efilter_nat_v6 {
+    chain output {
+        type nat hook output priority -100;
+
+        # Bypass marked traffic (SO_MARK=0x1)
+        meta mark 0x1 return
+
+        # Exempt direct access to the local DNS proxy
+        ip6 daddr ::1 udp dport 53 return
+        ip6 daddr ::1 tcp dport 53 return
+        ip6 daddr ::1 udp dport %d return
+        ip6 daddr ::1 tcp dport %d return
+
+        # Redirect ALL DNS (UDP/TCP 53) to local DNS proxy
+        udp dport 53  log prefix "dns_redirected" group 0
+        udp dport 53  redirect to :%d
+        tcp dport 53  log prefix "dns_redirected" group 0
+        tcp dport 53  redirect to :%d
+    }
+}
+`, dnsPort, dnsPort, dnsPort, dnsPort)
+}
+
+// GenerateNftRuleset generates a complete nftables ruleset for the specified mode, ports, and allowlists.
+// v4 and v6 are pre-split IPv4 and IPv6 allowlist entries respectively.
+func GenerateNftRuleset(v4, v6 []string, httpsPort, httpPort, dnsPort int, mode string) string {
 	mode = strings.ToLower(mode)
 	if mode != filter.ModeDNS {
 		mode = filter.ModeHTTPS
 	}
 
-	allowSet := strings.Join(allowlist, ", ")
+	allowSetV4 := strings.Join(v4, ", ")
+	if allowSetV4 == "" {
+		allowSetV4 = "127.0.0.1"
+	}
 
+	// Generate IPv4 rules
 	var filterRules string
 	if mode == filter.ModeDNS {
-		filterRules = generateDNSFilterRules(allowSet, dnsPort)
+		filterRules = generateDNSFilterRules(allowSetV4, dnsPort)
 	} else {
-		filterRules = generateHTTPSFilterRules(allowSet, httpPort, httpsPort)
+		filterRules = generateHTTPSFilterRules(allowSetV4, httpPort, httpsPort)
 	}
 
 	var natRules string
 	if mode == filter.ModeDNS {
 		natRules = generateDNSNATRules(dnsPort)
 	} else {
-		natRules = generateHTTPSNATRules(allowSet, httpPort, httpsPort)
+		natRules = generateHTTPSNATRules(allowSetV4, httpPort, httpsPort)
 	}
 
 	ruleset := filterRules + "\n" + natRules
-	if mode == filter.ModeHTTPS {
-		ruleset += "\n" + generateIPv6FilterRules()
+
+	// Generate IPv6 rules
+	if len(v6) > 0 {
+		allowSetV6 := strings.Join(v6, ", ")
+
+		if mode == filter.ModeDNS {
+			ruleset += "\n" + generateDNSFilterRulesV6(allowSetV6, dnsPort)
+			ruleset += "\n" + generateDNSNATRulesV6(dnsPort)
+		} else {
+			ruleset += "\n" + generateHTTPSFilterRulesV6(allowSetV6, httpPort, httpsPort)
+			ruleset += "\n" + generateHTTPSNATRulesV6(allowSetV6, httpPort, httpsPort)
+		}
+	} else {
+		// No IPv6 allowlist entries — drop all IPv6 egress (preserve existing behavior)
+		ruleset += "\n" + generateIPv6DropAllRules()
 	}
 
 	return ruleset
@@ -417,30 +611,58 @@ type PacketInfo struct {
 	DestinationPort int
 }
 
+// parseIPLayer decodes the IP layer from a raw packet payload.
+// Returns the parsed packet, source/destination IPs, protocol number, and whether parsing succeeded.
+func parseIPLayer(payload []byte) (gopacket.Packet, string, string, uint8, bool) { //nolint:ireturn
+	switch payload[0] >> 4 {
+	case 4:
+		packet := gopacket.NewPacket(payload, layers.LayerTypeIPv4, gopacket.Default)
+
+		ipLayer := packet.Layer(layers.LayerTypeIPv4)
+		if ipLayer == nil {
+			return nil, "", "", 0, false
+		}
+
+		ip := ipLayer.(*layers.IPv4) //nolint:forcetypeassert
+
+		return packet, ip.SrcIP.String(), ip.DstIP.String(), uint8(ip.Protocol), true
+	case 6:
+		packet := gopacket.NewPacket(payload, layers.LayerTypeIPv6, gopacket.Default)
+
+		ip6Layer := packet.Layer(layers.LayerTypeIPv6)
+		if ip6Layer == nil {
+			return nil, "", "", 0, false
+		}
+
+		ip6 := ip6Layer.(*layers.IPv6) //nolint:forcetypeassert
+
+		return packet, ip6.SrcIP.String(), ip6.DstIP.String(), uint8(ip6.NextHeader), true
+	default:
+		return nil, "", "", 0, false
+	}
+}
+
 // parsePacketInfo extracts network layer information from a raw packet payload.
+// Supports both IPv4 and IPv6 packets.
 func parsePacketInfo(payload []byte) PacketInfo {
 	if len(payload) < minPacketSize {
 		return PacketInfo{}
 	}
 
-	packet := gopacket.NewPacket(payload, layers.LayerTypeIPv4, gopacket.Default)
-
-	ipLayer := packet.Layer(layers.LayerTypeIPv4)
-	if ipLayer == nil {
+	packet, srcIP, dstIP, protoNum, ok := parseIPLayer(payload)
+	if !ok {
 		return PacketInfo{}
 	}
-
-	ip := ipLayer.(*layers.IPv4) //nolint:forcetypeassert
 
 	if tcpLayer := packet.Layer(layers.LayerTypeTCP); tcpLayer != nil {
 		tcp := tcpLayer.(*layers.TCP) //nolint:forcetypeassert
 
 		return PacketInfo{
-			Src:             fmt.Sprintf("%s:%d", ip.SrcIP, tcp.SrcPort),
-			Dst:             fmt.Sprintf("%s:%d", ip.DstIP, tcp.DstPort),
+			Src:             fmt.Sprintf("%s:%d", srcIP, tcp.SrcPort),
+			Dst:             fmt.Sprintf("%s:%d", dstIP, tcp.DstPort),
 			Protocol:        "TCP",
-			SourceIP:        ip.SrcIP.String(),
-			DestinationIP:   ip.DstIP.String(),
+			SourceIP:        srcIP,
+			DestinationIP:   dstIP,
 			SourcePort:      int(tcp.SrcPort),
 			DestinationPort: int(tcp.DstPort),
 		}
@@ -450,22 +672,22 @@ func parsePacketInfo(payload []byte) PacketInfo {
 		udp := udpLayer.(*layers.UDP) //nolint:forcetypeassert
 
 		return PacketInfo{
-			Src:             fmt.Sprintf("%s:%d", ip.SrcIP, udp.SrcPort),
-			Dst:             fmt.Sprintf("%s:%d", ip.DstIP, udp.DstPort),
+			Src:             fmt.Sprintf("%s:%d", srcIP, udp.SrcPort),
+			Dst:             fmt.Sprintf("%s:%d", dstIP, udp.DstPort),
 			Protocol:        "UDP",
-			SourceIP:        ip.SrcIP.String(),
-			DestinationIP:   ip.DstIP.String(),
+			SourceIP:        srcIP,
+			DestinationIP:   dstIP,
 			SourcePort:      int(udp.SrcPort),
 			DestinationPort: int(udp.DstPort),
 		}
 	}
 
 	return PacketInfo{
-		Src:           ip.SrcIP.String(),
-		Dst:           ip.DstIP.String(),
-		Protocol:      strconv.Itoa(int(ip.Protocol)),
-		SourceIP:      ip.SrcIP.String(),
-		DestinationIP: ip.DstIP.String(),
+		Src:           srcIP,
+		Dst:           dstIP,
+		Protocol:      strconv.Itoa(int(protoNum)),
+		SourceIP:      srcIP,
+		DestinationIP: dstIP,
 	}
 }
 

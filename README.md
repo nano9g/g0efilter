@@ -8,14 +8,11 @@
 > [!WARNING]
 > g0efilter is in active development and its configuration may change often.
 
-> [!NOTE]
-> g0efilter currently supports IPv4 only. In HTTPS mode, IPv6 egress is blocked by default to prevent bypass.
-
 g0efilter is a lightweight container designed to filter outbound (egress) traffic from attached container workloads. Run g0efilter alongside your workloads and attach them to share its network namespace to enforce a simple IP and domain allowlist policy.
 
 ### Background
 
-As a self-hoster running many open source apps, I wanted an easy way to restrict outbound connections from containers, as not all can be trusted. While Docker supports internal-only networks, some containers do need selective network and internet access. I wanted to support wildcard subdomains (e.g. `*.example.com`) without terminating TLS connections or relying on IP allowlisting alone, as CDNs can have multiple changing IPs and many subdomains. This could probably be achieved with third-party firewall products, but I wanted an open source, lightweight filter that runs alongside Docker Compose workloads...so here we are.
+As a self-hoster running many open source apps, I wanted an easy way to restrict outbound connections from containers, since not all can be trusted. While Docker supports internal-only networks, some containers still need selective network and internet access. The goal was to support wildcard subdomains (for example, *.example.com) without terminating TLS connections or relying solely on IP allowlisting, as CDNs often use multiple, changing IPs across many subdomains. This can be done with third-party firewall products, but the aim here is an open source, lightweight filter that runs alongside Docker Compose workloads...so here we are.
 
 ### Features
 
