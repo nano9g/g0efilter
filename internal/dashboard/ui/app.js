@@ -151,7 +151,7 @@ async function requestUnblock(type, value, targetHostname) {
 }
 
 function unblockDomain(domain, sourceHostname) {
-  var targetHost = prompt('Target hostname (leave empty for all hosts):', sourceHostname || '');
+  var targetHost = prompt('Target client (leave empty for all clients):', sourceHostname || '');
   if (targetHost === null) return; // Cancelled
   if (!confirm('Queue unblock request for domain: ' + domain + '?')) return;
   requestUnblock('domain', domain, targetHost.trim());
@@ -169,7 +169,7 @@ function unblockIP(ip, sourceHostname) {
     // IPv4 with port: "1.2.3.4:443" → "1.2.3.4"
     cleanIP = ip.split(':')[0];
   }
-  var targetHost = prompt('Target hostname (leave empty for all hosts):', sourceHostname || '');
+  var targetHost = prompt('Target client (leave empty for all clients):', sourceHostname || '');
   if (targetHost === null) return; // Cancelled
   if (!confirm('Queue unblock request for IP: ' + cleanIP + '?')) return;
   requestUnblock('ip', cleanIP, targetHost.trim());
@@ -236,6 +236,7 @@ function rowHTML(it){
   
   return '<tr>' +
     '<td><span class="badge '+badge+'">'+esc(act)+'</span></td>' +
+    '<td>'+unblockBtn+'</td>' +
     '<td>'+esc(comp)+'</td>' +
     '<td>'+esc(host)+'</td>' +
     '<td class="mono">'+esc(src)+'</td>' +
@@ -244,7 +245,6 @@ function rowHTML(it){
     '<td class="mono">'+esc(fid)+'</td>' +
     '<td class="mono">'+esc(ver)+'</td>' +
     '<td><small>'+esc(new Date(when).toLocaleString())+' <span style="opacity:.6">('+esc(rel(when))+' ago)</span></small></td>' +
-    '<td>'+unblockBtn+'</td>' +
   '</tr>';
 }
 function renderStream(replace){
