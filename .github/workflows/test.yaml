@@ -335,12 +335,15 @@ jobs:
             || { echo "ERROR: no ip6 daddr allow rule"; exit 1; }
           echo "OK: IPv6 filter table has proper HTTPS rules"
 
-          echo "[IPv6] Attempt curl -6 to https://[2606:4700:4700::1111] (informational)"
-          if $COMPOSE exec tester sh -lc \
-            "curl -6 -sS --max-time 10 https://[2606:4700:4700::1111] -o /dev/null 2>&1"; then
-            echo "OK: IPv6 connection to allowed address succeeded"
+          echo "[IPv6] Checking for IPv6 default route in tester container..."
+          if $COMPOSE exec tester sh -lc 'ip -6 route 2>/dev/null | grep -q "^default"'; then
+            echo "[IPv6] IPv6 default route present — attempting curl -6"
+            $COMPOSE exec tester sh -lc \
+              "curl -6 -sS --max-time 10 https://[2606:4700:4700::1111] -o /dev/null" \
+              && echo "OK: IPv6 connection to allowed address succeeded" \
+              || { echo "ERROR: IPv6 route present but curl -6 failed"; exit 1; }
           else
-            echo "INFO: IPv6 curl failed (may be expected if Docker IPv6 networking is not available)"
+            echo "INFO: no IPv6 default route in tester container (expected on GitHub-hosted runners) — skipping curl -6"
           fi
 
       - name: "Phase 3: Dashboard log verification"
