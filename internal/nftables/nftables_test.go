@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"slices"
 	"strconv"
 	"strings"
@@ -14,6 +15,8 @@ import (
 
 	"github.com/florianl/go-nflog/v2"
 	"github.com/g0lab/g0efilter/internal/filter"
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
 )
 
 // Test errors defined as static variables to satisfy err113 linter.
@@ -216,7 +219,7 @@ func TestGenerateNftRuleset(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			ruleset := GenerateNftRuleset(tt.allowlist, tt.httpsPort, tt.httpPort, tt.dnsPort, tt.mode)
+			ruleset := GenerateNftRuleset(tt.v4, tt.v6, tt.httpsPort, tt.httpPort, tt.dnsPort, tt.mode)
 
 			if ruleset == "" {
 				t.Error("GenerateNftRuleset() returned empty ruleset")
@@ -225,73 +228,52 @@ func TestGenerateNftRuleset(t *testing.T) {
 			// Check for expected content in ruleset
 			for _, expected := range tt.expectedContains {
 				if !strings.Contains(ruleset, expected) {
-					t.Errorf("GenerateNftRuleset() ruleset missing %q", expected)
+					t.Errorf("GenerateNftRuleset() ruleset missing %q\nRuleset:\n%s", expected, ruleset)
 				}
 			}
 
-			// Check that allowlist IPs are included if provided
-			if len(tt.allowlist) > 0 {
-				for _, ip := range tt.allowlist {
-					if !strings.Contains(ruleset, ip) {
-						t.Errorf("GenerateNftRuleset() ruleset missing allowlist IP %q", ip)
-					}
+			// Check that v4 allowlist IPs are included if provided
+			for _, ip := range tt.v4 {
+				if !strings.Contains(ruleset, ip) {
+					t.Errorf("GenerateNftRuleset() ruleset missing v4 allowlist IP %q", ip)
+				}
+			}
+
+			// Check that v6 allowlist IPs are included if provided
+			for _, ip := range tt.v6 {
+				if !strings.Contains(ruleset, ip) {
+					t.Errorf("GenerateNftRuleset() ruleset missing v6 allowlist IP %q", ip)
 				}
 			}
 		})
 	}
 }
 
-func getGenerateNftRulesetTests() []struct {
+type generateNftRulesetTest struct {
 	name             string
-	allowlist        []string
+	v4               []string
+	v6               []string
 	httpsPort        int
 	httpPort         int
 	dnsPort          int
 	mode             string
 	expectedContains []string
-} {
-	https := getHTTPSModeTests()
-	dns := getDNSModeTests()
-	defaults := getDefaultModeTests()
+}
 
-	tests := make([]struct {
-		name             string
-		allowlist        []string
-		httpsPort        int
-		httpPort         int
-		dnsPort          int
-		mode             string
-		expectedContains []string
-	}, 0, len(https)+len(dns)+len(defaults))
-
-	tests = append(tests, https...)
-	tests = append(tests, dns...)
-	tests = append(tests, defaults...)
+func getGenerateNftRulesetTests() []generateNftRulesetTest {
+	tests := getHTTPSModeTests()
+	tests = append(tests, getDNSModeTests()...)
+	tests = append(tests, getDefaultModeTests()...)
+	tests = append(tests, getIPv6ModeTests()...)
 
 	return tests
 }
 
-func getHTTPSModeTests() []struct {
-	name             string
-	allowlist        []string
-	httpsPort        int
-	httpPort         int
-	dnsPort          int
-	mode             string
-	expectedContains []string
-} {
-	return []struct {
-		name             string
-		allowlist        []string
-		httpsPort        int
-		httpPort         int
-		dnsPort          int
-		mode             string
-		expectedContains []string
-	}{
+func getHTTPSModeTests() []generateNftRulesetTest {
+	return []generateNftRulesetTest{
 		{
-			name:      "https mode with allowlist",
-			allowlist: []string{"1.1.1.1", "8.8.8.8"},
+			name:      "https mode with v4 allowlist",
+			v4:        []string{"1.1.1.1", "8.8.8.8"},
 			httpsPort: 8443,
 			httpPort:  8080,
 			dnsPort:   53,
@@ -310,27 +292,11 @@ func getHTTPSModeTests() []struct {
 	}
 }
 
-func getDNSModeTests() []struct {
-	name             string
-	allowlist        []string
-	httpsPort        int
-	httpPort         int
-	dnsPort          int
-	mode             string
-	expectedContains []string
-} {
-	return []struct {
-		name             string
-		allowlist        []string
-		httpsPort        int
-		httpPort         int
-		dnsPort          int
-		mode             string
-		expectedContains []string
-	}{
+func getDNSModeTests() []generateNftRulesetTest {
+	return []generateNftRulesetTest{
 		{
-			name:      "dns mode with allowlist",
-			allowlist: []string{"9.9.9.9"},
+			name:      "dns mode with v4 allowlist",
+			v4:        []string{"9.9.9.9"},
 			httpsPort: 8443,
 			httpPort:  8080,
 			dnsPort:   5353,
@@ -347,27 +313,10 @@ func getDNSModeTests() []struct {
 	}
 }
 
-func getDefaultModeTests() []struct {
-	name             string
-	allowlist        []string
-	httpsPort        int
-	httpPort         int
-	dnsPort          int
-	mode             string
-	expectedContains []string
-} {
-	return []struct {
-		name             string
-		allowlist        []string
-		httpsPort        int
-		httpPort         int
-		dnsPort          int
-		mode             string
-		expectedContains []string
-	}{
+func getDefaultModeTests() []generateNftRulesetTest {
+	return []generateNftRulesetTest{
 		{
 			name:      "empty allowlist defaults to https",
-			allowlist: []string{},
 			httpsPort: 8443,
 			httpPort:  8080,
 			dnsPort:   53,
@@ -378,6 +327,60 @@ func getDefaultModeTests() []struct {
 				"table ip6 g0efilter_v6",
 				"tcp dport 80",
 				"tcp dport 443",
+			},
+		},
+	}
+}
+
+func getIPv6ModeTests() []generateNftRulesetTest {
+	return []generateNftRulesetTest{
+		{
+			name:      "https mode with mixed v4 and v6 allowlist",
+			v4:        []string{"1.1.1.1"},
+			v6:        []string{"2001:db8::1", "2606:4700::/32"},
+			httpsPort: 8443,
+			httpPort:  8080,
+			dnsPort:   53,
+			mode:      "https",
+			expectedContains: []string{
+				"table ip g0efilter_v4",
+				"table ip g0efilter_nat_v4",
+				"table ip6 g0efilter_v6",
+				"table ip6 g0efilter_nat_v6",
+				"allow_daddr_v4",
+				"allow_daddr_v6",
+				"type ipv6_addr",
+				"ip6 daddr",
+				"icmpv6 type echo-request",
+			},
+		},
+		{
+			name:      "dns mode with v6 allowlist",
+			v4:        []string{"8.8.8.8"},
+			v6:        []string{"2001:4860:4860::8888"},
+			httpsPort: 8443,
+			httpPort:  8080,
+			dnsPort:   5353,
+			mode:      "dns",
+			expectedContains: []string{
+				"table ip g0efilter_v4",
+				"table ip6 g0efilter_v6",
+				"table ip6 g0efilter_nat_v6",
+				"allow_daddr_v6",
+				"type ipv6_addr",
+				"ip6 daddr ::1",
+			},
+		},
+		{
+			name:      "v4 only preserves drop-all v6",
+			v4:        []string{"1.1.1.1"},
+			httpsPort: 8443,
+			httpPort:  8080,
+			dnsPort:   53,
+			mode:      "https",
+			expectedContains: []string{
+				"table ip6 g0efilter_v6",
+				"policy drop",
 			},
 		},
 	}
@@ -1271,6 +1274,20 @@ func TestParsePacketInfo(t *testing.T) {
 			expectDst:   "",
 			expectProto: "",
 		},
+		{
+			name:        "valid IPv4 TCP SYN packet",
+			payload:     buildIPv4TCPPacket(t),
+			expectSrc:   "10.0.0.1:12345",
+			expectDst:   "10.0.0.2:443",
+			expectProto: "TCP",
+		},
+		{
+			name:        "valid IPv6 TCP SYN packet",
+			payload:     buildIPv6TCPPacket(t),
+			expectSrc:   "2001:db8::1:12345",
+			expectDst:   "2001:db8::2:443",
+			expectProto: "TCP",
+		},
 	}
 
 	for _, tt := range tests {
@@ -1285,6 +1302,145 @@ func TestParsePacketInfo(t *testing.T) {
 			}
 		})
 	}
+}
+
+// buildIPv4TCPPacket constructs a minimal IPv4+TCP packet for testing.
+func buildIPv4TCPPacket(t *testing.T) []byte {
+	t.Helper()
+
+	buf := gopacket.NewSerializeBuffer()
+	opts := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
+
+	ipv4 := &layers.IPv4{
+		Version:  4,
+		IHL:      5,
+		TTL:      64,
+		Protocol: layers.IPProtocolTCP,
+		SrcIP:    net.IPv4(10, 0, 0, 1),
+		DstIP:    net.IPv4(10, 0, 0, 2),
+	}
+
+	tcp := &layers.TCP{
+		SrcPort: 12345,
+		DstPort: 443,
+		SYN:     true,
+	}
+
+	_ = tcp.SetNetworkLayerForChecksum(ipv4)
+
+	err := gopacket.SerializeLayers(buf, opts, ipv4, tcp)
+	if err != nil {
+		t.Fatalf("failed to serialize IPv4 TCP packet: %v", err)
+	}
+
+	return buf.Bytes()
+}
+
+// buildIPv6TCPPacket constructs a minimal IPv6+TCP packet for testing.
+func buildIPv6TCPPacket(t *testing.T) []byte {
+	t.Helper()
+
+	buf := gopacket.NewSerializeBuffer()
+	opts := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
+
+	ipv6 := &layers.IPv6{
+		Version:    6,
+		NextHeader: layers.IPProtocolTCP,
+		HopLimit:   64,
+		SrcIP:      net.ParseIP("2001:db8::1"),
+		DstIP:      net.ParseIP("2001:db8::2"),
+	}
+
+	tcp := &layers.TCP{
+		SrcPort: 12345,
+		DstPort: 443,
+		SYN:     true,
+	}
+
+	_ = tcp.SetNetworkLayerForChecksum(ipv6)
+
+	err := gopacket.SerializeLayers(buf, opts, ipv6, tcp)
+	if err != nil {
+		t.Fatalf("failed to serialize IPv6 TCP packet: %v", err)
+	}
+
+	return buf.Bytes()
+}
+
+func TestSplitByFamily(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		allowlist  []string
+		expectedV4 []string
+		expectedV6 []string
+	}{
+		{
+			name:       "only IPv4",
+			allowlist:  []string{"1.1.1.1", "10.0.0.0/8"},
+			expectedV4: []string{"1.1.1.1", "10.0.0.0/8"},
+			expectedV6: nil,
+		},
+		{
+			name:       "only IPv6",
+			allowlist:  []string{"2001:db8::1", "2606:4700::/32"},
+			expectedV4: nil,
+			expectedV6: []string{"2001:db8::1", "2606:4700::/32"},
+		},
+		{
+			name:       "mixed",
+			allowlist:  []string{"1.1.1.1", "2001:db8::1", "10.0.0.0/8", "fd00::/8"},
+			expectedV4: []string{"1.1.1.1", "10.0.0.0/8"},
+			expectedV6: []string{"2001:db8::1", "fd00::/8"},
+		},
+		{
+			name:       "empty allowlist",
+			allowlist:  []string{},
+			expectedV4: nil,
+			expectedV6: nil,
+		},
+		{
+			name:       "invalid entries skipped",
+			allowlist:  []string{"1.1.1.1", "not-an-ip", "2001:db8::1"},
+			expectedV4: []string{"1.1.1.1"},
+			expectedV6: []string{"2001:db8::1"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			v4, v6 := splitByFamily(tt.allowlist)
+
+			if !slicesEqualOrBothNil(v4, tt.expectedV4) {
+				t.Errorf("splitByFamily() v4 = %v, want %v", v4, tt.expectedV4)
+			}
+
+			if !slicesEqualOrBothNil(v6, tt.expectedV6) {
+				t.Errorf("splitByFamily() v6 = %v, want %v", v6, tt.expectedV6)
+			}
+		})
+	}
+}
+
+func slicesEqualOrBothNil(a, b []string) bool {
+	if len(a) == 0 && len(b) == 0 {
+		return true
+	}
+
+	if len(a) != len(b) {
+		return false
+	}
+
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+
+	return true
 }
 
 func TestProcessActionEvent(t *testing.T) {

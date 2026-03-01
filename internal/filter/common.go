@@ -221,9 +221,13 @@ func bidirectionalCopyWithBufferedReader(conn net.Conn, backend net.Conn, br *bu
 	wg.Wait()
 }
 
-const soOriginalDst = 80 // from linux/netfilter_ipv4.h
+const (
+	soOriginalDst   = 80 // from linux/netfilter_ipv4.h (SO_ORIGINAL_DST)
+	soOriginalDstV6 = 80 // from linux/netfilter_ipv6.h (IP6T_SO_ORIGINAL_DST)
+)
 
 // originalDstTCP retrieves the original destination address before iptables REDIRECT using SO_ORIGINAL_DST.
+// Supports both IPv4 (AF_INET) and IPv6 (AF_INET6) connections.
 func originalDstTCP(conn *net.TCPConn) (string, error) {
 	raw, err := conn.SyscallConn()
 	if err != nil {
@@ -236,42 +240,14 @@ func originalDstTCP(conn *net.TCPConn) (string, error) {
 	)
 
 	err = raw.Control(func(fd uintptr) {
-		var sa unix.RawSockaddrInet4
-
-		optlen := uint32(unsafe.Sizeof(sa))
-
-		// getsockopt(fd, SOL_IP, SO_ORIGINAL_DST, &sa, &optlen)
-		_, _, errno := syscall.Syscall6(syscall.SYS_GETSOCKOPT,
-			fd,
-			uintptr(unix.SOL_IP),
-			uintptr(soOriginalDst),
-			uintptr(unsafe.Pointer(&sa)),     // #nosec G103
-			uintptr(unsafe.Pointer(&optlen)), // #nosec G103
-			0)
-		if errno != 0 {
-			ctrlErr = errno
-
+		// Try IPv4 first
+		out, ctrlErr = getOriginalDstV4(fd)
+		if ctrlErr == nil {
 			return
 		}
 
-		// Expect a full sockaddr_in (16 bytes on Linux)
-		if optlen < uint32(unsafe.Sizeof(sa)) {
-			ctrlErr = syscall.EINVAL
-
-			return
-		}
-
-		// Validate address family
-		if sa.Family != unix.AF_INET {
-			ctrlErr = syscall.EAFNOSUPPORT
-
-			return
-		}
-
-		// sin_port is network byte order (big-endian)
-		port := int(binary.BigEndian.Uint16((*[2]byte)(unsafe.Pointer(&sa.Port))[:])) // #nosec G103
-		ip := net.IP(sa.Addr[:]).String()
-		out = net.JoinHostPort(ip, strconv.Itoa(port))
+		// Fall back to IPv6
+		out, ctrlErr = getOriginalDstV6(fd)
 	})
 	if err != nil {
 		return "", fmt.Errorf("raw.Control failed: %w", err)
@@ -282,6 +258,73 @@ func originalDstTCP(conn *net.TCPConn) (string, error) {
 	}
 
 	return out, nil
+}
+
+// getsockoptDst performs a SYS_GETSOCKOPT syscall to retrieve a raw socket address option.
+func getsockoptDst(fd, level, opt uintptr, p unsafe.Pointer, optlen *uint32) error { // #nosec G103
+	_, _, errno := syscall.Syscall6(syscall.SYS_GETSOCKOPT,
+		fd,
+		level,
+		opt,
+		uintptr(p),                      // #nosec G103
+		uintptr(unsafe.Pointer(optlen)), // #nosec G103
+		0)
+	if errno != 0 {
+		return errno
+	}
+
+	return nil
+}
+
+// buildHostPort converts raw address bytes and a network-byte-order port into a host:port string.
+func buildHostPort(addrBytes []byte, port uint16) string {
+	p := int(binary.BigEndian.Uint16((*[2]byte)(unsafe.Pointer(&port))[:])) // #nosec G103
+
+	return net.JoinHostPort(net.IP(addrBytes).String(), strconv.Itoa(p))
+}
+
+// getOriginalDstV4 retrieves the original IPv4 destination via SO_ORIGINAL_DST.
+func getOriginalDstV4(fd uintptr) (string, error) {
+	var sa unix.RawSockaddrInet4
+
+	optlen := uint32(unsafe.Sizeof(sa))
+
+	err := getsockoptDst(fd, uintptr(unix.SOL_IP), uintptr(soOriginalDst), unsafe.Pointer(&sa), &optlen) // #nosec G103
+	if err != nil {
+		return "", err
+	}
+
+	if optlen < uint32(unsafe.Sizeof(sa)) {
+		return "", syscall.EINVAL
+	}
+
+	if sa.Family != unix.AF_INET {
+		return "", syscall.EAFNOSUPPORT
+	}
+
+	return buildHostPort(sa.Addr[:], sa.Port), nil
+}
+
+// getOriginalDstV6 retrieves the original IPv6 destination via IP6T_SO_ORIGINAL_DST.
+func getOriginalDstV6(fd uintptr) (string, error) {
+	var sa unix.RawSockaddrInet6
+
+	optlen := uint32(unsafe.Sizeof(sa))
+
+	err := getsockoptDst(fd, uintptr(unix.SOL_IPV6), uintptr(soOriginalDstV6), unsafe.Pointer(&sa), &optlen) // #nosec G103
+	if err != nil {
+		return "", err
+	}
+
+	if optlen < uint32(unsafe.Sizeof(sa)) {
+		return "", syscall.EINVAL
+	}
+
+	if sa.Family != unix.AF_INET6 {
+		return "", syscall.EAFNOSUPPORT
+	}
+
+	return buildHostPort(sa.Addr[:], sa.Port), nil
 }
 
 // FlowID generates a deterministic hash identifier for a network flow using source, destination, and protocol.

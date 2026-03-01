@@ -126,13 +126,25 @@ jobs:
           set -e
           COMPOSE="docker compose -f docker-compose-build.yaml"
 
-          echo "=== IPv6 egress filtering ==="
+          echo "=== IPv6 egress filtering (no IPv6 in policy) ==="
 
           echo "[IPv6] Verify ip6 g0efilter_v6 table is loaded with policy drop"
           $COMPOSE exec g0efilter nft list table ip6 g0efilter_v6 \
             | grep -q "policy drop" \
             || { echo "ERROR: ip6 g0efilter_v6 table not loaded or policy not drop"; exit 1; }
           echo "OK: ip6 filter table loaded with policy drop"
+
+          echo "[IPv6] Verify no allow_daddr_v6 set exists (blanket drop-all)"
+          ! $COMPOSE exec g0efilter nft list table ip6 g0efilter_v6 \
+            | grep -q "allow_daddr_v6" \
+            || { echo "ERROR: allow_daddr_v6 set found but no IPv6 IPs in policy"; exit 1; }
+          echo "OK: no allow_daddr_v6 set (blanket drop-all active)"
+
+          echo "[IPv6] Verify no ip6 NAT table exists"
+          ! $COMPOSE exec g0efilter nft list tables \
+            | grep -q "g0efilter_nat_v6" \
+            || { echo "ERROR: g0efilter_nat_v6 table found but no IPv6 IPs in policy"; exit 1; }
+          echo "OK: no g0efilter_nat_v6 table"
 
           echo "[IPv6] curl -6 should FAIL (IPv6 egress blocked)"
           ! $COMPOSE exec tester sh -lc "curl -6 -sS --max-time 5 https://google.com -o /dev/null 2>&1" \
@@ -247,6 +259,89 @@ jobs:
           CODE=$(run_curl "curl -s -o /dev/null -w '%{http_code}' $API/unblocks")
           [ "$CODE" = "401" ] || { echo "ERROR: got $CODE"; exit 1; }
           echo "OK"
+
+      - name: "Phase 2.5: IPv6 remote unblock → policy reload (https mode only)"
+        if: matrix.filter_mode == 'https'
+        working-directory: examples/build
+        run: |
+          set -e
+          COMPOSE="docker compose -f docker-compose-build.yaml"
+          API="http://localhost:8081/api/v1"
+          API_KEY="your-secure-api-key-here"
+
+          run_curl() {
+            $COMPOSE exec tester sh -lc "$1"
+          }
+
+          echo "=== Remote unblock: IPv6 address 2606:4700:4700::1111 ==="
+
+          echo "[Unblock] Create request for IPv6 IP 2606:4700:4700::1111"
+          CREATE=$(run_curl "curl -sf -X POST $API/unblocks \
+            -H 'Content-Type: application/json' \
+            -d '{\"type\":\"ip\",\"value\":\"2606:4700:4700::1111\",\"target_hostname\":\"host-01\"}'")
+          echo "$CREATE" | grep -q '"status":"pending"' \
+            || { echo "ERROR: create failed: $CREATE"; exit 1; }
+          ID=$(echo "$CREATE" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+          [ -n "$ID" ] || { echo "ERROR: no id returned"; exit 1; }
+          echo "OK: created id=$ID"
+
+          echo "[Unblock] Waiting for g0efilter to poll and apply IPv6 unblock..."
+          for i in $(seq 1 15); do
+            STATUS_NOW=$(run_curl "curl -sf $API/unblocks/status")
+            if echo "$STATUS_NOW" | grep -q '"pending":\[\]'; then
+              echo "OK: g0efilter processed IPv6 unblock (attempt $i)"
+              break
+            fi
+            if [ "$i" -eq 15 ]; then
+              echo "ERROR: IPv6 unblock not completed after 75s"
+              echo "Status: $STATUS_NOW"
+              $COMPOSE logs g0efilter | tail -20
+              exit 1
+            fi
+            sleep 5
+          done
+
+          echo "[Unblock] Verify 2606:4700:4700::1111 added to policy.yaml"
+          grep -q '2606:4700:4700::1111' policy.yaml \
+            || { echo "ERROR: IPv6 address not in policy.yaml"; cat policy.yaml; exit 1; }
+          echo "OK: 2606:4700:4700::1111 found in policy.yaml"
+
+          echo "[Filter] Waiting for policy reload..."
+          sleep 10
+
+          echo "[IPv6] Verify ip6 g0efilter_v6 table now has allow_daddr_v6 set"
+          $COMPOSE exec g0efilter nft list table ip6 g0efilter_v6 \
+            | grep -q "allow_daddr_v6" \
+            || { echo "ERROR: allow_daddr_v6 set not found after IPv6 unblock"; exit 1; }
+          echo "OK: allow_daddr_v6 set present"
+
+          echo "[IPv6] Verify allow_daddr_v6 contains the unblocked address"
+          $COMPOSE exec g0efilter nft list set ip6 g0efilter_v6 allow_daddr_v6 \
+            | grep -q "2606:4700:4700::1111" \
+            || { echo "ERROR: 2606:4700:4700::1111 not in allow_daddr_v6 set"; exit 1; }
+          echo "OK: 2606:4700:4700::1111 in allow_daddr_v6 set"
+
+          echo "[IPv6] Verify ip6 NAT table created"
+          $COMPOSE exec g0efilter nft list tables \
+            | grep -q "g0efilter_nat_v6" \
+            || { echo "ERROR: g0efilter_nat_v6 table not found"; exit 1; }
+          echo "OK: g0efilter_nat_v6 table present"
+
+          echo "[IPv6] Verify ip6 filter table has proper HTTPS rules (not blanket drop)"
+          NFT_V6=$($COMPOSE exec g0efilter nft list table ip6 g0efilter_v6)
+          echo "$NFT_V6" | grep -q "icmpv6 type echo-request" \
+            || { echo "ERROR: no icmpv6 echo-request rule in v6 filter"; exit 1; }
+          echo "$NFT_V6" | grep -q "ip6 daddr @allow_daddr_v6" \
+            || { echo "ERROR: no ip6 daddr allow rule"; exit 1; }
+          echo "OK: IPv6 filter table has proper HTTPS rules"
+
+          echo "[IPv6] Attempt curl -6 to https://[2606:4700:4700::1111] (informational)"
+          if $COMPOSE exec tester sh -lc \
+            "curl -6 -sS --max-time 10 https://[2606:4700:4700::1111] -o /dev/null 2>&1"; then
+            echo "OK: IPv6 connection to allowed address succeeded"
+          else
+            echo "INFO: IPv6 curl failed (may be expected if Docker IPv6 networking is not available)"
+          fi
 
       - name: "Phase 3: Dashboard log verification"
         working-directory: examples/build

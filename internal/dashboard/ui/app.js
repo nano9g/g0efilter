@@ -148,8 +148,17 @@ function unblockDomain(domain, sourceHostname) {
 }
 
 function unblockIP(ip, sourceHostname) {
-  // Strip port if present
-  var cleanIP = ip.split(':')[0];
+  // Strip port if present — only for IPv4 (e.g. "1.2.3.4:80").
+  // IPv6 addresses are passed without a port suffix; bracketed form "[::1]:80" is also handled.
+  var cleanIP = ip;
+  if (ip.charAt(0) === '[') {
+    // Bracketed IPv6 with port: "[2001:db8::1]:443" → "2001:db8::1"
+    var m = ip.match(/^\[([^\]]+)\]/);
+    if (m) cleanIP = m[1];
+  } else if (ip.indexOf('.') !== -1 && ip.indexOf(':') !== -1) {
+    // IPv4 with port: "1.2.3.4:443" → "1.2.3.4"
+    cleanIP = ip.split(':')[0];
+  }
   var targetHost = prompt('Target hostname (leave empty for all hosts):', sourceHostname || '');
   if (targetHost === null) return; // Cancelled
   if (!confirm('Queue unblock request for IP: ' + cleanIP + '?')) return;
@@ -202,13 +211,15 @@ function rowHTML(it){
         unblockBtn = '<button class="unblock-btn" onclick="unblockDomain(\''+jsStringEsc(host)+'\', \''+escapedHn+'\')">Unblock Domain</button>';
       }
     } else if (dst) {
-      var cleanDst = dst.split(':')[0];
+      // Prefer the clean destination_ip field to avoid parsing the dst string,
+      // which uses non-standard "ipv6addr:port" notation for IPv6.
+      var cleanDst = (it.destination_ip) ? sanitizeRemoteData(it.destination_ip) : dst.split(':')[0];
       if (isUnblocked(completedUnblocks, cleanDst, hn)) {
         unblockBtn = '<span class="unblock-done">Unblocked</span>';
       } else if (isUnblocked(pendingUnblocks, cleanDst, hn)) {
         unblockBtn = '<span class="unblock-pending">Pending</span>';
       } else {
-        unblockBtn = '<button class="unblock-btn" onclick="unblockIP(\''+jsStringEsc(dst)+'\', \''+escapedHn+'\')">Unblock IP</button>';
+        unblockBtn = '<button class="unblock-btn" onclick="unblockIP(\''+jsStringEsc(cleanDst)+'\', \''+escapedHn+'\')">Unblock IP</button>';
       }
     }
   }

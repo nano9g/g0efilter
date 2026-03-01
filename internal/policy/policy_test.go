@@ -48,24 +48,31 @@ func getValidateIPTests() []struct {
 		input   string
 		wantErr bool
 	}{
-		// Valid cases
+		// Valid IPv4 cases
 		{"valid IPv4", "192.168.1.1", false},
 		{"valid IPv4 with whitespace", "  192.168.1.1  ", false},
 		{"valid CIDR", "192.168.1.0/24", false},
 		{"valid single IP CIDR", "192.168.1.1/32", false},
 		{"valid large subnet", "10.0.0.0/8", false},
 
+		// Valid IPv6 cases
+		{"valid IPv6", "2001:db8::1", false},
+		{"valid IPv6 loopback", "::1", false},
+		{"valid IPv6 CIDR", "2001:db8::/32", false},
+		{"valid IPv6 full", "2001:0db8:85a3:0000:0000:8a2e:0370:7334", false},
+		{"valid IPv6 /128", "2001:db8::1/128", false},
+
 		// Invalid cases
 		{"empty string", "", true},
 		{"whitespace only", "   ", true},
-		{"IPv6 address", "2001:db8::1", true},
-		{"IPv6 CIDR", "2001:db8::/32", true},
 		{"invalid IP", "999.999.999.999", true},
 		{"hostname", "example.com", true},
 		{"IP with port", "192.168.1.1:80", true},
 		{"invalid CIDR", "192.168.1.0/99", true},
 		{"partial IP", "192.168.1", true},
 		{"non-numeric", "not.an.ip.address", true},
+		{"bracketed IPv6 with port", "[::1]:80", true},
+		{"scoped IPv6", "fe80::1%eth0", true},
 	}
 }
 
@@ -1060,7 +1067,7 @@ func TestAppendIP(t *testing.T) {
 		}
 	})
 
-	t.Run("rejects IPv6", func(t *testing.T) {
+	t.Run("accepts IPv6", func(t *testing.T) {
 		t.Parallel()
 
 		tmpDir := t.TempDir()
@@ -1070,9 +1077,18 @@ func TestAppendIP(t *testing.T) {
 			t.Fatalf("Failed to write initial policy: %v", err)
 		}
 
-		err := AppendIP(policyFile, "::1")
-		if err == nil {
-			t.Error("AppendIP should reject IPv6")
+		err := AppendIP(policyFile, "2001:db8::1")
+		if err != nil {
+			t.Fatalf("AppendIP should accept IPv6: %v", err)
+		}
+
+		ips, _, err := ReadPolicy(policyFile)
+		if err != nil {
+			t.Fatalf("ReadPolicy failed: %v", err)
+		}
+
+		if len(ips) != 1 || ips[0] != "2001:db8::1" {
+			t.Errorf("Got IPs %v, want [2001:db8::1]", ips)
 		}
 	})
 }

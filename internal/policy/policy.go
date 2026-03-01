@@ -26,41 +26,44 @@ var (
 
 const maxDomainLength = 253
 
-// validateIP validates an IP address or CIDR range, rejecting IPv6 and addresses with ports.
+// validateIP validates an IP address or CIDR range, accepting both IPv4 and IPv6.
+// Rejects addresses with ports (e.g. 1.2.3.4:80 or [::1]:80) and scoped IPv6 (e.g. fe80::1%eth0).
 //
-//nolint:cyclop
+
 func validateIP(ip string) error {
 	ip = strings.TrimSpace(ip)
 	if ip == "" {
 		return fmt.Errorf("%w: empty", errInvalidIP)
 	}
 
-	// reject host:port (e.g. 1.2.3.4:80)
+	// Reject bracketed IPv6 with port (e.g. [::1]:80)
+	if strings.HasPrefix(ip, "[") {
+		return fmt.Errorf("%w (contains port): %s", errInvalidIP, ip)
+	}
+
+	// Reject scoped/zone IPv6 (e.g. fe80::1%eth0) — not useful for egress filtering
+	if strings.Contains(ip, "%") {
+		return fmt.Errorf("%w (scoped address): %s", errInvalidIP, ip)
+	}
+
+	// Reject IPv4 host:port (e.g. 1.2.3.4:80) — exactly one colon and contains a dot
 	if i := strings.LastIndexByte(ip, ':'); i != -1 && strings.Count(ip, ":") == 1 && strings.Contains(ip, ".") {
 		return fmt.Errorf("%w (contains port): %s", errInvalidIP, ip)
 	}
 
 	// CIDR
 	if strings.Contains(ip, "/") {
-		_, ipnet, err := net.ParseCIDR(ip)
+		_, _, err := net.ParseCIDR(ip)
 		if err != nil {
 			return fmt.Errorf("%w range: %s", errInvalidIP, ip)
-		}
-
-		if ipnet.IP.To4() == nil {
-			return fmt.Errorf("%w: IPv6 not allowed: %s", errInvalidIP, ip)
 		}
 
 		return nil
 	}
 
-	// Plain IPv4
+	// Plain IP (IPv4 or IPv6)
 	parsed := net.ParseIP(ip)
-	if parsed == nil || parsed.To4() == nil {
-		if parsed != nil {
-			return fmt.Errorf("%w: IPv6 not allowed: %s", errInvalidIP, ip)
-		}
-
+	if parsed == nil {
 		return fmt.Errorf("%w: %s", errInvalidIP, ip)
 	}
 
