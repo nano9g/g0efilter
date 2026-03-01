@@ -963,6 +963,10 @@ func TestSecurityHeaders(t *testing.T) {
 
 	router.ServeHTTP(w, req)
 
+	// Capture headers once in the parent before spawning parallel sub-tests.
+	// w.Result() lazily initialises internal state and is not safe for concurrent use.
+	headers := w.Result().Header
+
 	tests := []struct {
 		header  string
 		wantSub string
@@ -978,7 +982,7 @@ func TestSecurityHeaders(t *testing.T) {
 		t.Run(tt.header+":"+tt.wantSub, func(t *testing.T) {
 			t.Parallel()
 
-			got := w.Result().Header.Get(tt.header)
+			got := headers.Get(tt.header)
 			if !strings.Contains(got, tt.wantSub) {
 				t.Errorf("%s = %q, want it to contain %q", tt.header, got, tt.wantSub)
 			}
