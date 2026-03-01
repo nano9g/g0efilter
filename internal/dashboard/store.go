@@ -74,8 +74,8 @@ func (s *memStore) Clear(_ context.Context) error {
 
 // Query returns log entries matching the query string and ID filter, sorted by ID descending.
 func (s *memStore) Query(_ context.Context, q string, sinceID int64, limit int) ([]LogEntry, error) {
-	if limit <= 0 || limit > 500 {
-		limit = 200
+	if limit <= 0 || limit > 5000 {
+		limit = 5000
 	}
 
 	q = strings.ToLower(strings.TrimSpace(q))

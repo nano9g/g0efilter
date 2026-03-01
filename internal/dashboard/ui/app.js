@@ -1,7 +1,7 @@
 /* --- state --- */
 var LIVE = JSON.parse(localStorage.getItem('autoRefresh') || 'true');
 var VIEW = localStorage.getItem('view') || 'stream';
-var MAX_ROWS = 2000;
+var MAX_ROWS = 5000; // fallback — overwritten by /api/v1/config on init (mirrors BUFFER_SIZE env var)
 var pendingUnblocks = new Set(); // Track value\0target_hostname keys with pending unblock requests
 var completedUnblocks = new Set(); // Track value\0target_hostname keys that have been unblocked
 
@@ -151,7 +151,7 @@ async function requestUnblock(type, value, targetHostname) {
 }
 
 function unblockDomain(domain, sourceHostname) {
-  var targetHost = prompt('Target hostname (leave empty for all hosts):', sourceHostname || '');
+  var targetHost = prompt('Target client (leave empty for all clients):', sourceHostname || '');
   if (targetHost === null) return; // Cancelled
   if (!confirm('Queue unblock request for domain: ' + domain + '?')) return;
   requestUnblock('domain', domain, targetHost.trim());
@@ -169,7 +169,7 @@ function unblockIP(ip, sourceHostname) {
     // IPv4 with port: "1.2.3.4:443" → "1.2.3.4"
     cleanIP = ip.split(':')[0];
   }
-  var targetHost = prompt('Target hostname (leave empty for all hosts):', sourceHostname || '');
+  var targetHost = prompt('Target client (leave empty for all clients):', sourceHostname || '');
   if (targetHost === null) return; // Cancelled
   if (!confirm('Queue unblock request for IP: ' + cleanIP + '?')) return;
   requestUnblock('ip', cleanIP, targetHost.trim());
@@ -236,6 +236,7 @@ function rowHTML(it){
   
   return '<tr>' +
     '<td><span class="badge '+badge+'">'+esc(act)+'</span></td>' +
+    '<td>'+unblockBtn+'</td>' +
     '<td>'+esc(comp)+'</td>' +
     '<td>'+esc(host)+'</td>' +
     '<td class="mono">'+esc(src)+'</td>' +
@@ -244,7 +245,6 @@ function rowHTML(it){
     '<td class="mono">'+esc(fid)+'</td>' +
     '<td class="mono">'+esc(ver)+'</td>' +
     '<td><small>'+esc(new Date(when).toLocaleString())+' <span style="opacity:.6">('+esc(rel(when))+' ago)</span></small></td>' +
-    '<td>'+unblockBtn+'</td>' +
   '</tr>';
 }
 function renderStream(replace){
@@ -294,7 +294,7 @@ function renderAgg(){
     html+='<tr>'+
       '<td class="agg-key">'+esc(a.key)+'</td>'+
       '<td>'+a.total+'</td>'+
-      '<td>'+esc(act)+'</td>'+
+      '<td><span class="badge badge-'+act+'">'+esc(act)+'</span></td>'+
       '<td>'+(a.lastSeen? esc(new Date(a.lastSeen).toLocaleString())+' <span style="opacity:.6">('+esc(rel(a.lastSeen))+' ago)</span>':'')+'</td>'+
     '</tr>';
   }
@@ -307,7 +307,7 @@ document.getElementById('aggRefresh').onclick=function(){ renderAgg(); };
 /* --- data load (backfill from memory store) --- */
 async function reload(){
   try {
-    var res = await fetch('/api/v1/logs?limit=500');
+    var res = await fetch('/api/v1/logs?limit='+MAX_ROWS);
     if (!res.ok) { console.error('reload failed:', res.status); return; }
     var items = await res.json();
     for(var i=0;i<items.length;i++) items[i]=norm(items[i]);
@@ -400,8 +400,19 @@ function startUnblockPolling() {
 }
 
 /* init */
-reload().then(function(){
-  loadUnblockStatus(); // Load initial unblock status
-  startUnblockPolling(); // Start polling for status updates
-  if(LIVE) connectSSE();
-});
+// Fetch server config first so MAX_ROWS matches the server's actual buffer size,
+// then backfill, start unblock polling, and connect SSE.
+fetch('/api/v1/config')
+  .then(function(r){ return r.ok ? r.json() : Promise.resolve({}); })
+  .catch(function(){ return {}; })
+  .then(function(cfg){
+    if(cfg.buffer_size > 0) MAX_ROWS = cfg.buffer_size;
+  })
+  .then(function(){
+    return reload();
+  })
+  .then(function(){
+    loadUnblockStatus();
+    startUnblockPolling();
+    if(LIVE) connectSSE();
+  });
