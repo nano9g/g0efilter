@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
 <meta charset="utf-8"/>
 <title>g0efilter dashboard</title>
@@ -18,7 +18,7 @@
         <option value="BLOCKED">BLOCKED</option>
       </select>
     </label>
-    <label>Component
+    <label>Filter
       <select id="componentFilter">
         <option value="">Any</option>
         <option value="https">https</option>
@@ -56,11 +56,11 @@
         <thead>
           <tr>
             <th>Action</th>
-            <th>Comp</th>
-            <th>Host/HTTPS</th>
+            <th>Filter</th>
+            <th>Host</th>
             <th>Src</th>
             <th>Dst</th>
-            <th>Hostname</th>
+            <th>Client</th>
             <th>Flow ID</th>
             <th>Version</th>
             <th>Time</th>
@@ -75,7 +75,7 @@
   <!-- Aggregates (simplified) -->
   <section id="aggView" style="display:none">
     <div id="aggBox" class="box">
-      <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+      <div class="agg-header">
         <small id="aggStats"></small>
         <button id="aggRefresh" class="primary">Refresh</button>
       </div>
@@ -88,7 +88,7 @@
       </colgroup>
       <thead>
         <tr>
-          <th style="text-align:left">Key (HTTPS/Host/IP)</th>
+          <th class="th-left">Key (HTTPS/Host/IP)</th>
           <th>Total</th>
           <th>Action</th>
           <th>Last Seen</th>

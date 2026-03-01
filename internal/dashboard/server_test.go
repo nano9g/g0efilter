@@ -951,6 +951,45 @@ func TestRoutes(t *testing.T) {
 	}
 }
 
+// TestSecurityHeaders verifies that all expected security headers are present on every response.
+func TestSecurityHeaders(t *testing.T) {
+	t.Parallel()
+
+	srv := newTestServer()
+	router := srv.routes()
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	// Capture headers once in the parent before spawning parallel sub-tests.
+	// w.Result() lazily initialises internal state and is not safe for concurrent use.
+	headers := w.Result().Header
+
+	tests := []struct {
+		header  string
+		wantSub string
+	}{
+		{"Content-Security-Policy", "default-src 'self'"},
+		{"Content-Security-Policy", "frame-ancestors 'none'"},
+		{"X-Content-Type-Options", "nosniff"},
+		{"X-Frame-Options", "DENY"},
+		{"Referrer-Policy", "strict-origin-when-cross-origin"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.header+":"+tt.wantSub, func(t *testing.T) {
+			t.Parallel()
+
+			got := headers.Get(tt.header)
+			if !strings.Contains(got, tt.wantSub) {
+				t.Errorf("%s = %q, want it to contain %q", tt.header, got, tt.wantSub)
+			}
+		})
+	}
+}
+
 // BenchmarkProcessPayload benchmarks the payload processing.
 func BenchmarkProcessPayload(b *testing.B) {
 	logger := slog.New(slog.DiscardHandler)

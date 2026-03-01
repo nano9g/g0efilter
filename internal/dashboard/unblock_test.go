@@ -398,8 +398,8 @@ func TestGenerateID(t *testing.T) {
 
 		ids := make(map[string]bool)
 
-		for i := int64(1); i <= 100; i++ {
-			id := generateID(i)
+		for range 100 {
+			id := generateID()
 			if ids[id] {
 				t.Errorf("Duplicate ID generated: %s", id)
 			}
@@ -408,12 +408,23 @@ func TestGenerateID(t *testing.T) {
 		}
 	})
 
-	t.Run("generates 12-character IDs", func(t *testing.T) {
+	t.Run("generates 16-character IDs", func(t *testing.T) {
 		t.Parallel()
 
-		id := generateID(1)
-		if len(id) != 12 {
-			t.Errorf("ID length = %d, want 12", len(id))
+		id := generateID()
+		if len(id) != 16 {
+			t.Errorf("ID length = %d, want 16", len(id))
+		}
+	})
+
+	t.Run("generates hex-only characters", func(t *testing.T) {
+		t.Parallel()
+
+		id := generateID()
+		for _, c := range id {
+			if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+				t.Errorf("ID %q contains non-hex character %q", id, c)
+			}
 		}
 	})
 }
