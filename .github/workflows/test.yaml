@@ -28,7 +28,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Set up Docker Compose
-        uses: docker/setup-compose-action@v1
+        uses: docker/setup-compose-action@v2
 
       - name: Bring up g0efilter stack (${{ matrix.filter_mode }} mode)
         working-directory: examples/build
