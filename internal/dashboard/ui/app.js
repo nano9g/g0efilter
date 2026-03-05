@@ -40,8 +40,8 @@ tabAgg.onclick = function(){
 
 /* controls */
 function applyFilters(){
-  renderStream(true);
-  if(VIEW==='agg') renderAgg();
+  if(VIEW==='stream') renderStream();
+  else renderAgg();
 }
 
 // Auto-apply filters on change
@@ -54,7 +54,8 @@ document.getElementById('clearBtn').onclick = async function(){
   var apiKey = localStorage.getItem('apiKey') || '';
   var clearHeaders = {};
   if (apiKey) clearHeaders['X-Api-Key'] = apiKey;
-  await fetch('/api/v1/logs', {method:'DELETE', headers: clearHeaders});
+  var clearRes = await fetch('/api/v1/logs', {method:'DELETE', headers: clearHeaders});
+  if (!clearRes.ok) { alert('Failed to clear logs (status ' + clearRes.status + ')'); return; }
   streamBody.innerHTML=''; allItems.length=0; renderAgg();
 };
 autoRefreshEl.addEventListener('change', function(){
@@ -83,9 +84,10 @@ function sanitizeRemoteData(s){
 function norm(it){try{ if(it && typeof it.fields==='string' && it.fields && it.fields!=='null'){ it.fields=JSON.parse(it.fields);} }catch{ /* ignore parse errors */ } return it;}
 function getAction(it){return sanitizeRemoteData(it && (it.action || (it.fields&&it.fields.action) || '')).toUpperCase();}
 function getComp(it){return sanitizeRemoteData(it && (it.component || (it.fields&&it.fields.component) || '')).toLowerCase();}
-function hostOf(it){var f=(it&&it.fields)||{};return sanitizeRemoteData(it.http_host||it.host||it.https||it.qname||f.http_host||f.host||f.https||f.qname||'');}
-function dstOf(it){if(it&&it.dst)return sanitizeRemoteData(it.dst); if(it&&it.destination_ip&&it.destination_port)return sanitizeRemoteData(it.destination_ip+':'+it.destination_port); return it&&it.destination_ip?sanitizeRemoteData(it.destination_ip):'';}
-function srcOf(it){if(it&&it.src)return sanitizeRemoteData(it.src); if(it&&it.source_ip&&it.source_port)return sanitizeRemoteData(it.source_ip+':'+it.source_port); return it&&it.source_ip?sanitizeRemoteData(it.source_ip):'';}
+function hostOf(it){var f=(it&&it.fields)||{};return sanitizeRemoteData((it&&(it.http_host||it.host||it.https||it.qname))||f.http_host||f.host||f.https||f.qname||'');}
+function joinHostPort(ip, port){ return (ip&&ip.indexOf(':')!==-1&&ip.indexOf('[')===-1) ? '['+ip+']:'+port : ip+':'+port; }
+function dstOf(it){if(it&&it.dst)return sanitizeRemoteData(it.dst); if(it&&it.destination_ip&&it.destination_port)return sanitizeRemoteData(joinHostPort(it.destination_ip,it.destination_port)); return it&&it.destination_ip?sanitizeRemoteData(it.destination_ip):'';}
+function srcOf(it){if(it&&it.src)return sanitizeRemoteData(it.src); if(it&&it.source_ip&&it.source_port)return sanitizeRemoteData(joinHostPort(it.source_ip,it.source_port)); return it&&it.source_ip?sanitizeRemoteData(it.source_ip):'';}
 function hostnameOf(it){return sanitizeRemoteData(it.hostname || ((it.fields&&it.fields.hostname)||''));}
 function flowIdOf(it){return sanitizeRemoteData(it.flow_id || ((it.fields&&it.fields.flow_id)||''));}
 function versionOf(it){return sanitizeRemoteData(it.version || ((it.fields&&it.fields.version)||''));}
@@ -140,7 +142,7 @@ async function requestUnblock(type, value, targetHostname) {
       // Track this value+target as pending and re-render to hide the button
       var storeTarget = targetHostname || '';
       pendingUnblocks.add(value.toLowerCase() + '\0' + storeTarget.toLowerCase());
-      renderStream(true);
+      renderStream();
     } else {
       var err = await res.json();
       alert('Failed to queue unblock: ' + (err.error || 'Unknown error'));
@@ -179,12 +181,25 @@ function unblockIP(ip, sourceHostname) {
 window.unblockDomain = unblockDomain;
 window.unblockIP = unblockIP;
 
-// Escape a value for safe inclusion in a single-quoted JavaScript string literal.
-// This first applies `esc` (for HTML escaping) and then escapes backslashes
-// and single quotes so the resulting string can be embedded inside onclick="...".
+// Escape a value for safe inclusion in a single-quoted JavaScript string literal
+// inside an HTML attribute (e.g. onclick="...").
+//
+// HTML entities like &#x27; are decoded by the HTML parser *before* JS executes,
+// so they cannot be used to neutralise JS-special characters in this context.
+// Instead we use JS hex/unicode escapes which are invisible to the HTML parser
+// and are then interpreted safely by the JS engine.
 function jsStringEsc(value) {
-  var s = esc(value == null ? '' : value);
-  return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  return String(value == null ? '' : value)
+    .replace(/\\/g, '\\x5C')   // backslash — must come first
+    .replace(/'/g, '\\x27')    // single quote — JS string delimiter
+    .replace(/"/g, '\\x22')    // double quote — HTML attribute delimiter
+    .replace(/</g, '\\x3C')    // prevent tag injection
+    .replace(/>/g, '\\x3E')
+    .replace(/&/g, '\\x26')    // prevent entity injection
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n')
+    .replace(/\u2028/g, '\\u2028') // JS line/paragraph separators
+    .replace(/\u2029/g, '\\u2029');
 }
 
 // Check if a value is in an unblock set for a given hostname.
@@ -197,7 +212,7 @@ function isUnblocked(set, value, hostname) {
 
 function rowHTML(it){
   var act  = getAction(it);
-  var comp = getComp(it) || (it.component||'');
+  var comp = getComp(it);
   var host = hostOf(it);
   var src  = srcOf(it);
   var dst  = dstOf(it);
@@ -247,7 +262,7 @@ function rowHTML(it){
     '<td><small>'+esc(new Date(when).toLocaleString())+' <span style="opacity:.6">('+esc(rel(when))+' ago)</span></small></td>' +
   '</tr>';
 }
-function renderStream(replace){
+function renderStream(){
   updateFilterCache();
   var out='';
   for(var i=0;i<allItems.length;i++){
@@ -255,7 +270,7 @@ function renderStream(replace){
     if(!matches(it)) continue;
     out+=rowHTML(it);
   }
-  if(replace){ streamBody.innerHTML=out; } else if(out){ streamBody.insertAdjacentHTML('afterbegin', out); }
+  streamBody.innerHTML=out;
 }
 
 /* --- aggregates --- */
@@ -312,7 +327,7 @@ async function reload(){
     var items = await res.json();
     for(var i=0;i<items.length;i++) items[i]=norm(items[i]);
     allItems = items;
-    renderStream(true);
+    renderStream();
     renderAgg();
   } catch(e) {
     console.error('reload error:', e);
@@ -353,6 +368,11 @@ function connectSSE(){
 function disconnectSSE(){ if(es){ es.close(); es=null; } }
 
 /* --- unblock status polling --- */
+function setsEqual(a, b){
+  if(a.size !== b.size) return false;
+  for(var v of a) if(!b.has(v)) return false;
+  return true;
+}
 async function loadUnblockStatus(){
   try {
     var res = await fetch('/api/v1/unblocks/status');
@@ -369,7 +389,7 @@ async function loadUnblockStatus(){
         newPending.add(p.value.toLowerCase() + '\0' + (p.target_hostname || '').toLowerCase());
       }
     }
-    if (newPending.size !== pendingUnblocks.size) changed = true;
+    if(!setsEqual(newPending, pendingUnblocks)) changed = true;
     pendingUnblocks = newPending;
 
     // Update completed set (keyed by value\0target_hostname)
@@ -380,12 +400,12 @@ async function loadUnblockStatus(){
         newCompleted.add(c.value.toLowerCase() + '\0' + (c.target_hostname || '').toLowerCase());
       }
     }
-    if (newCompleted.size !== completedUnblocks.size) changed = true;
+    if(!setsEqual(newCompleted, completedUnblocks)) changed = true;
     completedUnblocks = newCompleted;
     
     // Re-render if status changed
     if (changed) {
-      renderStream(true);
+      renderStream();
     }
   } catch {
     // Ignore errors - status polling is best-effort

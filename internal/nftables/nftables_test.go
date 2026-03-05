@@ -372,7 +372,10 @@ func getIPv6ModeTests() []generateNftRulesetTest {
 			},
 		},
 		{
-			name:      "v4 only preserves drop-all v6",
+			// With no IPv6 IPs in the policy, ::1 is used as a placeholder so the
+			// allow_daddr_v6 set is never empty. Traffic is redirected through the
+			// proxy (which enforces domain policy) rather than blanket-dropped.
+			name:      "v4 only uses ::1 placeholder for v6 proxy redirect",
 			v4:        []string{"1.1.1.1"},
 			httpsPort: 8443,
 			httpPort:  8080,
@@ -381,6 +384,9 @@ func getIPv6ModeTests() []generateNftRulesetTest {
 			expectedContains: []string{
 				"table ip6 g0efilter_v6",
 				"policy drop",
+				"allow_daddr_v6",
+				"::1",
+				"table ip6 g0efilter_nat_v6",
 			},
 		},
 	}
