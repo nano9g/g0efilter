@@ -181,12 +181,25 @@ function unblockIP(ip, sourceHostname) {
 window.unblockDomain = unblockDomain;
 window.unblockIP = unblockIP;
 
-// Escape a value for safe inclusion in a single-quoted JavaScript string literal.
-// This first applies `esc` (for HTML escaping) and then escapes backslashes
-// and single quotes so the resulting string can be embedded inside onclick="...".
+// Escape a value for safe inclusion in a single-quoted JavaScript string literal
+// inside an HTML attribute (e.g. onclick="...").
+//
+// HTML entities like &#x27; are decoded by the HTML parser *before* JS executes,
+// so they cannot be used to neutralise JS-special characters in this context.
+// Instead we use JS hex/unicode escapes which are invisible to the HTML parser
+// and are then interpreted safely by the JS engine.
 function jsStringEsc(value) {
-  var s = esc(value == null ? '' : value);
-  return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  return String(value == null ? '' : value)
+    .replace(/\\/g, '\\x5C')   // backslash — must come first
+    .replace(/'/g, '\\x27')    // single quote — JS string delimiter
+    .replace(/"/g, '\\x22')    // double quote — HTML attribute delimiter
+    .replace(/</g, '\\x3C')    // prevent tag injection
+    .replace(/>/g, '\\x3E')
+    .replace(/&/g, '\\x26')    // prevent entity injection
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n')
+    .replace(/\u2028/g, '\\u2028') // JS line/paragraph separators
+    .replace(/\u2029/g, '\\u2029');
 }
 
 // Check if a value is in an unblock set for a given hostname.
