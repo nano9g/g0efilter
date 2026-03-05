@@ -134,22 +134,22 @@ jobs:
             || { echo "ERROR: ip6 g0efilter_v6 table not loaded or policy not drop"; exit 1; }
           echo "OK: ip6 filter table loaded with policy drop"
 
-          echo "[IPv6] Verify no allow_daddr_v6 set exists (blanket drop-all)"
-          ! $COMPOSE exec g0efilter nft list table ip6 g0efilter_v6 \
+          echo "[IPv6] Verify allow_daddr_v6 set exists with ::1 placeholder (proxy redirect active)"
+          $COMPOSE exec g0efilter nft list table ip6 g0efilter_v6 \
             | grep -q "allow_daddr_v6" \
-            || { echo "ERROR: allow_daddr_v6 set found but no IPv6 IPs in policy"; exit 1; }
-          echo "OK: no allow_daddr_v6 set (blanket drop-all active)"
+            || { echo "ERROR: allow_daddr_v6 set not found - expected ::1 placeholder set"; exit 1; }
+          echo "OK: allow_daddr_v6 set present (contains ::1 placeholder)"
 
-          echo "[IPv6] Verify no ip6 NAT table exists"
-          ! $COMPOSE exec g0efilter nft list tables \
+          echo "[IPv6] Verify ip6 NAT table exists (proxy redirect always active)"
+          $COMPOSE exec g0efilter nft list tables \
             | grep -q "g0efilter_nat_v6" \
-            || { echo "ERROR: g0efilter_nat_v6 table found but no IPv6 IPs in policy"; exit 1; }
-          echo "OK: no g0efilter_nat_v6 table"
+            || { echo "ERROR: g0efilter_nat_v6 table not found - expected proxy redirect rules"; exit 1; }
+          echo "OK: g0efilter_nat_v6 table present"
 
-          echo "[IPv6] curl -6 should FAIL (IPv6 egress blocked)"
+          echo "[IPv6] curl -6 should FAIL (no IPv6 domains/IPs in policy, blocked by proxy)"
           ! $COMPOSE exec tester sh -lc "curl -6 -sS --max-time 5 https://google.com -o /dev/null 2>&1" \
-            || { echo "ERROR: IPv6 connection succeeded but should be blocked"; exit 1; }
-          echo "OK: IPv6 egress blocked"
+            || { echo "ERROR: IPv6 connection succeeded but should be blocked by proxy"; exit 1; }
+          echo "OK: IPv6 egress blocked by proxy"
 
       - name: "Phase 2: Remote unblock → policy reload (${{ matrix.filter_mode }} mode)"
         working-directory: examples/build
