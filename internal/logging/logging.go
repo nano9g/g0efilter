@@ -228,7 +228,8 @@ func (p *poster) Probe(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, defaultProbeTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.url, bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext( //nolint:gosec // G704: URL from config, not user input
+		ctx, http.MethodPost, p.url, bytes.NewReader(payload))
 	if err != nil {
 		return fmt.Errorf("failed to create probe request: %w", err)
 	}
@@ -338,7 +339,7 @@ func (p *poster) attemptPost(ctx context.Context, payload []byte) bool {
 	req.Header.Set("Content-Type", "application/json")
 	setAPIAuthHeaders(req.Header, p.apiKey)
 
-	resp, err := p.httpC.Do(req) //nolint:gosec // URL is from internal dashboard config, not user input
+	resp, err := p.httpC.Do(req)
 
 	// Check if we should retry
 	if !shouldRetry(resp, err) {

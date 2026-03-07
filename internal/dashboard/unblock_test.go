@@ -2,6 +2,7 @@
 package dashboard
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -203,7 +204,8 @@ func TestUnblockHandlers(t *testing.T) {
 		srv := newTestServer()
 
 		body := `{"type":"domain","value":"example.com","target_hostname":"host1"}`
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/unblocks", strings.NewReader(body))
+		bodyReader := strings.NewReader(body)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/unblocks", bodyReader)
 		req.Header.Set("Content-Type", "application/json")
 
 		rec := httptest.NewRecorder()
@@ -242,7 +244,8 @@ func TestUnblockHandlers(t *testing.T) {
 		srv := newTestServer()
 
 		body := `{"type":"invalid","value":"example.com"}`
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/unblocks", strings.NewReader(body))
+		bodyReader := strings.NewReader(body)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/unblocks", bodyReader)
 		req.Header.Set("Content-Type", "application/json")
 
 		rec := httptest.NewRecorder()
@@ -260,7 +263,8 @@ func TestUnblockHandlers(t *testing.T) {
 		srv := newTestServer()
 
 		body := `{"type":"domain","value":""}`
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/unblocks", strings.NewReader(body))
+		bodyReader := strings.NewReader(body)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/unblocks", bodyReader)
 		req.Header.Set("Content-Type", "application/json")
 
 		rec := httptest.NewRecorder()
@@ -279,7 +283,7 @@ func TestUnblockHandlers(t *testing.T) {
 		srv.unblockStore.Add("domain", "example1.com", "")
 		srv.unblockStore.Add("ip", "192.168.1.1", "host1")
 
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/unblocks", nil)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/v1/unblocks", nil)
 		rec := httptest.NewRecorder()
 
 		srv.listUnblocksHandler(rec, req)
@@ -309,7 +313,7 @@ func TestUnblockHandlers(t *testing.T) {
 		srv.unblockStore.Add("domain", "all-hosts.com", "")       // all
 		srv.unblockStore.Add("domain", "host1-only.com", "host1") // host1 only
 
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/unblocks?hostname=host1", nil)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/v1/unblocks?hostname=host1", nil)
 		rec := httptest.NewRecorder()
 
 		srv.listUnblocksHandler(rec, req)
@@ -328,7 +332,7 @@ func TestUnblockHandlers(t *testing.T) {
 		}
 
 		// Request for host2 should only get the global one
-		req2 := httptest.NewRequest(http.MethodGet, "/api/v1/unblocks?hostname=host2", nil)
+		req2 := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/v1/unblocks?hostname=host2", nil)
 		rec2 := httptest.NewRecorder()
 
 		srv.listUnblocksHandler(rec2, req2)
@@ -354,7 +358,8 @@ func TestUnblockHandlers(t *testing.T) {
 		id := srv.unblockStore.Add("domain", "example.com", "")
 
 		body := `{"id":"` + id + `"}`
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/unblocks/ack", strings.NewReader(body))
+		bodyReader := strings.NewReader(body)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/unblocks/ack", bodyReader)
 		req.Header.Set("Content-Type", "application/json")
 
 		rec := httptest.NewRecorder()
@@ -377,7 +382,8 @@ func TestUnblockHandlers(t *testing.T) {
 		srv := newTestServer()
 
 		body := `{"id":"nonexistent"}`
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/unblocks/ack", strings.NewReader(body))
+		bodyReader := strings.NewReader(body)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/unblocks/ack", bodyReader)
 		req.Header.Set("Content-Type", "application/json")
 
 		rec := httptest.NewRecorder()
@@ -549,7 +555,8 @@ func TestCreateUnblockHandler_OversizedBody(t *testing.T) {
 
 	// Send a body larger than the 4 KiB limit
 	bigBody := strings.Repeat("x", 8192)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/unblocks", strings.NewReader(bigBody))
+	bigBodyReader := strings.NewReader(bigBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/unblocks", bigBodyReader)
 	req.Header.Set("Content-Type", "application/json")
 
 	rec := httptest.NewRecorder()
@@ -581,7 +588,8 @@ func TestCreateUnblockHandler_StoreFull(t *testing.T) {
 
 	// First request succeeds
 	body1 := `{"type":"domain","value":"example.com"}`
-	req1 := httptest.NewRequest(http.MethodPost, "/api/v1/unblocks", strings.NewReader(body1))
+	body1Reader := strings.NewReader(body1)
+	req1 := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/unblocks", body1Reader)
 	req1.Header.Set("Content-Type", "application/json")
 
 	rec1 := httptest.NewRecorder()
@@ -593,7 +601,8 @@ func TestCreateUnblockHandler_StoreFull(t *testing.T) {
 
 	// Second request hits capacity
 	body2 := `{"type":"domain","value":"other.com"}`
-	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/unblocks", strings.NewReader(body2))
+	body2Reader := strings.NewReader(body2)
+	req2 := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/unblocks", body2Reader)
 	req2.Header.Set("Content-Type", "application/json")
 
 	rec2 := httptest.NewRecorder()
@@ -630,7 +639,8 @@ func TestAckUnblockHandler_OversizedBody(t *testing.T) {
 	}
 
 	bigBody := strings.Repeat("x", 8192)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/unblocks/ack", strings.NewReader(bigBody))
+	bigBodyReader := strings.NewReader(bigBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/unblocks/ack", bigBodyReader)
 	req.Header.Set("Content-Type", "application/json")
 
 	rec := httptest.NewRecorder()
@@ -668,7 +678,8 @@ func TestAckUnblockHandler_EmptyID(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			req := httptest.NewRequest(http.MethodPost, "/api/v1/unblocks/ack", strings.NewReader(tt.body))
+			bodyReader := strings.NewReader(tt.body)
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/unblocks/ack", bodyReader)
 			req.Header.Set("Content-Type", "application/json")
 
 			rec := httptest.NewRecorder()
@@ -711,7 +722,8 @@ func TestCreateUnblockHandler_InvalidIP(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			req := httptest.NewRequest(http.MethodPost, "/api/v1/unblocks", strings.NewReader(tt.body))
+			bodyReader := strings.NewReader(tt.body)
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/unblocks", bodyReader)
 			req.Header.Set("Content-Type", "application/json")
 
 			rec := httptest.NewRecorder()

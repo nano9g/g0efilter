@@ -539,7 +539,7 @@ func TestHealthHandler(t *testing.T) {
 
 	srv := newTestServer()
 
-	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/health", nil)
 	w := httptest.NewRecorder()
 
 	srv.healthHandler(w, req)
@@ -582,7 +582,7 @@ func TestIngestHandler(t *testing.T) {
 		}
 
 		body, _ := json.Marshal(payload)
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/logs", bytes.NewReader(body))
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/logs", bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 
 		w := httptest.NewRecorder()
@@ -615,7 +615,7 @@ func TestIngestHandler(t *testing.T) {
 		}
 
 		body, _ := json.Marshal(payload)
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/logs", bytes.NewReader(body))
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/logs", bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 
 		w := httptest.NewRecorder()
@@ -630,7 +630,8 @@ func TestIngestHandler(t *testing.T) {
 	t.Run("invalid JSON", func(t *testing.T) {
 		t.Parallel()
 
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/logs", strings.NewReader("invalid json"))
+		body := strings.NewReader("invalid json")
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/logs", body)
 		req.Header.Set("Content-Type", "application/json")
 
 		w := httptest.NewRecorder()
@@ -645,7 +646,7 @@ func TestIngestHandler(t *testing.T) {
 	t.Run("empty payload", func(t *testing.T) {
 		t.Parallel()
 
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/logs", strings.NewReader("[]"))
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/logs", strings.NewReader("[]"))
 		req.Header.Set("Content-Type", "application/json")
 
 		w := httptest.NewRecorder()
@@ -685,7 +686,7 @@ func TestListLogsHandler(t *testing.T) {
 	t.Run("list all logs", func(t *testing.T) {
 		t.Parallel()
 
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/logs", nil)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/v1/logs", nil)
 		w := httptest.NewRecorder()
 
 		srv.listLogsHandler(w, req)
@@ -709,7 +710,7 @@ func TestListLogsHandler(t *testing.T) {
 	t.Run("filter by query", func(t *testing.T) {
 		t.Parallel()
 
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/logs?q=blocked", nil)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/v1/logs?q=blocked", nil)
 		w := httptest.NewRecorder()
 
 		srv.listLogsHandler(w, req)
@@ -737,7 +738,7 @@ func TestListLogsHandler(t *testing.T) {
 	t.Run("limit results", func(t *testing.T) {
 		t.Parallel()
 
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/logs?limit=1", nil)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/v1/logs?limit=1", nil)
 		w := httptest.NewRecorder()
 
 		srv.listLogsHandler(w, req)
@@ -773,7 +774,7 @@ func TestClearLogsHandler(t *testing.T) {
 		Action:  "BLOCKED",
 	})
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/logs", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodDelete, "/api/v1/logs", nil)
 	w := httptest.NewRecorder()
 
 	srv.clearLogsHandler(w, req)
@@ -812,7 +813,7 @@ func TestRequireAPIKey(t *testing.T) {
 	t.Run("valid API key", func(t *testing.T) {
 		t.Parallel()
 
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/logs", nil)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/logs", nil)
 		req.Header.Set("X-Api-Key", "test-api-key")
 
 		w := httptest.NewRecorder()
@@ -827,7 +828,7 @@ func TestRequireAPIKey(t *testing.T) {
 	t.Run("missing API key", func(t *testing.T) {
 		t.Parallel()
 
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/logs", nil)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/logs", nil)
 		w := httptest.NewRecorder()
 
 		handler.ServeHTTP(w, req)
@@ -840,7 +841,7 @@ func TestRequireAPIKey(t *testing.T) {
 	t.Run("invalid API key", func(t *testing.T) {
 		t.Parallel()
 
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/logs", nil)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/logs", nil)
 		req.Header.Set("X-Api-Key", "wrong-key")
 
 		w := httptest.NewRecorder()
@@ -937,7 +938,7 @@ func TestRoutes(t *testing.T) {
 		t.Run(tt.method+" "+tt.path, func(t *testing.T) {
 			t.Parallel()
 
-			req := httptest.NewRequest(tt.method, tt.path, nil)
+			req := httptest.NewRequestWithContext(context.Background(), tt.method, tt.path, nil)
 			w := httptest.NewRecorder()
 
 			router.ServeHTTP(w, req)
@@ -958,7 +959,7 @@ func TestSecurityHeaders(t *testing.T) {
 	srv := newTestServer()
 	router := srv.routes()
 
-	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/health", nil)
 	w := httptest.NewRecorder()
 
 	router.ServeHTTP(w, req)
