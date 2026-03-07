@@ -137,7 +137,7 @@ type RequestData struct {
 	Method      string
 	ContentType string
 	FormValues  map[string]string
-	AuthToken   string //nolint:gosec // test struct, not a real secret
+	AuthToken   string
 	UserAgent   string
 }
 
@@ -155,6 +155,8 @@ func createMockNotificationServer(t *testing.T, requestChan chan<- *RequestData)
 		}
 
 		// Parse form data (URL-encoded for Gotify)
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+
 		err := r.ParseForm()
 		if err != nil {
 			t.Errorf("Failed to parse form: %v", err)
@@ -418,6 +420,8 @@ func runFormattingTest(t *testing.T, tc formattingTestCase) {
 	messageChan := make(chan string, 1)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+
 		_ = r.ParseForm() // Parse URL-encoded form data
 		messageChan <- r.FormValue("message")
 
@@ -458,6 +462,8 @@ func TestComponentMapping(t *testing.T) {
 	titleChan := make(chan string, 1)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // Limit request body size to prevent memory exhaustion
+
 		_ = r.ParseForm() // Parse URL-encoded form data
 		messageChan <- r.FormValue("message")
 

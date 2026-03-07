@@ -2,6 +2,7 @@
 package dashboard
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,7 +15,7 @@ func TestIndexHandler(t *testing.T) {
 
 	handler := IndexHandler()
 	// http.FileServer automatically serves index.html for directory requests
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil)
 	rr := httptest.NewRecorder()
 
 	handler.ServeHTTP(rr, req)
@@ -96,7 +97,7 @@ func TestIndexHandlerWithDifferentMethods(t *testing.T) {
 			t.Parallel()
 
 			// http.FileServer only supports GET and HEAD
-			req := httptest.NewRequest(method, "/", nil)
+			req := httptest.NewRequestWithContext(context.Background(), method, "/", nil)
 			rr := httptest.NewRecorder()
 
 			handler.ServeHTTP(rr, req)

@@ -209,7 +209,7 @@ func supervise(
 }
 
 func startServiceGroup(ctx context.Context, cfg config, domains []string, lg *slog.Logger) context.CancelFunc {
-	svcCtx, cancel := context.WithCancel(ctx)
+	svcCtx, cancel := context.WithCancel(ctx) //nolint:gosec // G118: cancel is caller's responsibility
 	startServices(svcCtx, cfg, domains, lg)
 
 	return cancel
@@ -624,7 +624,7 @@ func fileSHA256Hex(path string) (string, error) {
 		return "", errPolicyPathEmpty
 	}
 
-	f, err := os.Open(cleanPath) //nolint:gosec // path is filepath.Clean'd config value, not user input
+	f, err := os.Open(cleanPath)
 	if err != nil {
 		return "", fmt.Errorf("open %q: %w", cleanPath, err)
 	}
@@ -757,7 +757,7 @@ func fetchPendingUnblocks(
 		"has_api_key", cfg.dashboardAPIKey != "",
 	)
 
-	resp, err := client.Do(req) //nolint:gosec // URL from internal dashboard config
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("send request: %w", err)
 	}
@@ -860,7 +860,7 @@ func acknowledgeUnblock(ctx context.Context, client *http.Client, baseURL, apiKe
 	req.Header.Set("X-Api-Key", apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := client.Do(req) //nolint:gosec // URL from internal dashboard config
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("send ack request: %w", err)
 	}
