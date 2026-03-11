@@ -646,7 +646,7 @@ func sendLatest(ctx context.Context, reloadCh chan policyUpdate, upd policyUpdat
 // An nlink of 0 means the inode has been unlinked on the host (e.g. atomic-save
 // editor replaced the file) while a Docker single-file bind-mount still holds
 // an open reference to the old inode inside the container.
-func fileNlink(path string) (uint32, error) {
+func fileNlink(path string) (uint64, error) {
 	cleanPath := filepath.Clean(strings.TrimSpace(path))
 
 	var st syscall.Stat_t
@@ -656,7 +656,7 @@ func fileNlink(path string) (uint32, error) {
 		return 0, fmt.Errorf("lstat %q: %w", cleanPath, err)
 	}
 
-	return uint32(st.Nlink), nil //nolint:unconvert // Nlink is uint64 on amd64 Linux
+	return uint64(st.Nlink), nil
 }
 
 func fileSHA256Hex(path string) (string, error) {
