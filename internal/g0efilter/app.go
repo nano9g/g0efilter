@@ -18,13 +18,13 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/g0lab/g0efilter/internal/filter"
 	"github.com/g0lab/g0efilter/internal/logging"
 	"github.com/g0lab/g0efilter/internal/nftables"
 	"github.com/g0lab/g0efilter/internal/policy"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -46,6 +46,7 @@ var (
 	errUnknownUnblockType   = errors.New("unknown unblock type")
 	errAckFailed            = errors.New("unblock acknowledgment failed")
 	errUnexpectedHTTPStatus = errors.New("unexpected HTTP status")
+	errInodeLinked          = errors.New("inode still linked")
 )
 
 type policyUpdate struct {
@@ -79,7 +80,7 @@ func Run(version, date, commit string) error {
 
 	sigCh := make(chan os.Signal, 1)
 
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	signal.Notify(sigCh, os.Interrupt, unix.SIGTERM)
 	defer signal.Stop(sigCh)
 
 	domains, initialHash, err := loadInitialPolicy(ctx, cfg, lg)
@@ -575,8 +576,8 @@ func checkPolicyTick(
 	// unlinked inode (nlink == 0). The path still resolves inside the
 	// container but only returns the old content, so the hash never
 	// changes and no reload fires. Fix: mount the parent directory.
-	nlink, nlinkErr := fileNlink(cfg.policyPath)
-	if nlinkErr == nil && nlink == 0 {
+	unlinkErr := isInodeUnlinked(cfg.policyPath)
+	if unlinkErr == nil {
 		lg.Warn("policy.stale_inode",
 			"path", cfg.policyPath,
 			"hint", "inode is unlinked (nlink=0); live reload is broken. "+
@@ -642,21 +643,25 @@ func sendLatest(ctx context.Context, reloadCh chan policyUpdate, upd policyUpdat
 	}
 }
 
-// fileNlink returns the hard-link count for the file at path via syscall.Lstat.
-// An nlink of 0 means the inode has been unlinked on the host (e.g. atomic-save
-// editor replaced the file) while a Docker single-file bind-mount still holds
-// an open reference to the old inode inside the container.
-func fileNlink(path string) (uint64, error) {
+// isInodeUnlinked returns nil if the file at path has an nlink count of zero,
+// meaning its inode has been unlinked (e.g. by an atomic-save editor) while a
+// Docker single-file bind-mount still holds a reference to the old inode.
+// Returns a non-nil error if lstat fails or if nlink is non-zero.
+func isInodeUnlinked(path string) error {
 	cleanPath := filepath.Clean(strings.TrimSpace(path))
 
-	var st syscall.Stat_t
+	var st unix.Stat_t
 
-	err := syscall.Lstat(cleanPath, &st)
+	err := unix.Lstat(cleanPath, &st)
 	if err != nil {
-		return 0, fmt.Errorf("lstat %q: %w", cleanPath, err)
+		return fmt.Errorf("lstat %q: %w", cleanPath, err)
 	}
 
-	return uint64(st.Nlink), nil
+	if st.Nlink != 0 {
+		return errInodeLinked
+	}
+
+	return nil
 }
 
 func fileSHA256Hex(path string) (string, error) {
