@@ -35,7 +35,7 @@ jobs:
         env:
           FILTER_MODE: ${{ matrix.filter_mode }}
         run: |
-          chmod 666 policy.yaml
+          chmod 666 policy/policy.yaml
           docker compose -f docker-compose-build.yaml up -d \
             g0efilter g0efilter-dashboard tester
 
@@ -209,8 +209,8 @@ jobs:
           echo "OK: completed entry has target_hostname=host-01"
 
           echo "[Unblock] Verify google.com added to policy.yaml"
-          grep -q 'google.com' policy.yaml \
-            || { echo "ERROR: google.com not in policy.yaml"; cat policy.yaml; exit 1; }
+          grep -q 'google.com' policy/policy.yaml \
+            || { echo "ERROR: google.com not in policy.yaml"; cat policy/policy.yaml; exit 1; }
           echo "OK: google.com found in policy.yaml"
 
           echo "[Unblock] Verify pending list is empty"
@@ -302,8 +302,8 @@ jobs:
           done
 
           echo "[Unblock] Verify 2606:4700:4700::1111 added to policy.yaml"
-          grep -q '2606:4700:4700::1111' policy.yaml \
-            || { echo "ERROR: IPv6 address not in policy.yaml"; cat policy.yaml; exit 1; }
+          grep -q '2606:4700:4700::1111' policy/policy.yaml \
+            || { echo "ERROR: IPv6 address not in policy.yaml"; cat policy/policy.yaml; exit 1; }
           echo "OK: 2606:4700:4700::1111 found in policy.yaml"
 
           echo "[Filter] Waiting for policy reload..."

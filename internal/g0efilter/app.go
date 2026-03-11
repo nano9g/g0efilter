@@ -18,13 +18,13 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/g0lab/g0efilter/internal/filter"
 	"github.com/g0lab/g0efilter/internal/logging"
 	"github.com/g0lab/g0efilter/internal/nftables"
 	"github.com/g0lab/g0efilter/internal/policy"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -46,6 +46,7 @@ var (
 	errUnknownUnblockType   = errors.New("unknown unblock type")
 	errAckFailed            = errors.New("unblock acknowledgment failed")
 	errUnexpectedHTTPStatus = errors.New("unexpected HTTP status")
+	errInodeLinked          = errors.New("inode still linked")
 )
 
 type policyUpdate struct {
@@ -79,7 +80,7 @@ func Run(version, date, commit string) error {
 
 	sigCh := make(chan os.Signal, 1)
 
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	signal.Notify(sigCh, os.Interrupt, unix.SIGTERM)
 	defer signal.Stop(sigCh)
 
 	domains, initialHash, err := loadInitialPolicy(ctx, cfg, lg)
@@ -209,7 +210,7 @@ func supervise(
 }
 
 func startServiceGroup(ctx context.Context, cfg config, domains []string, lg *slog.Logger) context.CancelFunc {
-	svcCtx, cancel := context.WithCancel(ctx) //nolint:gosec // G118: cancel is caller's responsibility
+	svcCtx, cancel := context.WithCancel(ctx)
 	startServices(svcCtx, cfg, domains, lg)
 
 	return cancel
@@ -548,43 +549,67 @@ func pollPolicyChanges(
 			return
 
 		case <-t.C:
-			newHash, err := fileSHA256Hex(cfg.policyPath)
-			if err != nil {
-				lg.Warn("policy.hash_read_failed", "path", cfg.policyPath, "err", err)
-
-				continue
-			}
-
-			if lastHash == "" {
-				lastHash = newHash
-
-				continue
-			}
-
-			if newHash == lastHash {
-				continue
-			}
-
-			lg.Info("policy.change_detected", "old_hash", lastHash, "new_hash", newHash)
-
-			domains, ips, err := loadAndApplyPolicy(ctx, cfg, lg)
-			if err != nil {
-				lg.Error("policy.reload_failed", "err", err)
-
-				continue
-			}
-
-			lastHash = newHash
-
-			upd := policyUpdate{
-				hash:    newHash,
-				domains: append([]string(nil), domains...),
-				ips:     append([]string(nil), ips...),
-			}
-
-			sendLatest(ctx, reloadCh, upd)
+			lastHash = checkPolicyTick(ctx, cfg, lg, lastHash, reloadCh)
 		}
 	}
+}
+
+// checkPolicyTick runs one poll iteration: hashes the policy file, warns on a
+// stale bind-mount inode, and triggers a reload when the content has changed.
+// It returns the updated lastHash value.
+func checkPolicyTick(
+	ctx context.Context,
+	cfg config,
+	lg *slog.Logger,
+	lastHash string,
+	reloadCh chan policyUpdate,
+) string {
+	newHash, err := fileSHA256Hex(cfg.policyPath)
+	if err != nil {
+		lg.Warn("policy.hash_read_failed", "path", cfg.policyPath, "err", err)
+
+		return lastHash
+	}
+
+	// Detect stale single-file bind-mount: editors that use atomic save
+	// (write + rename) leave the container's bind-mount pointing at an
+	// unlinked inode (nlink == 0). The path still resolves inside the
+	// container but only returns the old content, so the hash never
+	// changes and no reload fires. Fix: mount the parent directory.
+	unlinkErr := isInodeUnlinked(cfg.policyPath)
+	if unlinkErr == nil {
+		lg.Warn("policy.stale_inode",
+			"path", cfg.policyPath,
+			"hint", "inode is unlinked (nlink=0); live reload is broken. "+
+				"Mount a directory instead of a single file: './policy/:/app/policy/' (see README)")
+	}
+
+	if lastHash == "" {
+		return newHash
+	}
+
+	if newHash == lastHash {
+		return lastHash
+	}
+
+	lg.Info("policy.change_detected", "old_hash", lastHash, "new_hash", newHash)
+
+	domains, ips, err := loadAndApplyPolicy(ctx, cfg, lg)
+	if err != nil {
+		lg.Error("policy.reload_failed", "err", err)
+
+		return lastHash
+	}
+
+	upd := policyUpdate{
+		hash:    newHash,
+		domains: append([]string(nil), domains...),
+		ips:     append([]string(nil), ips...),
+	}
+
+	sendLatest(ctx, reloadCh, upd)
+
+	return newHash
 }
 
 // sendLatest sends the most recent policy update to reloadCh, dropping any
@@ -616,6 +641,27 @@ func sendLatest(ctx context.Context, reloadCh chan policyUpdate, upd policyUpdat
 		return
 	case reloadCh <- upd:
 	}
+}
+
+// isInodeUnlinked returns nil if the file at path has an nlink count of zero,
+// meaning its inode has been unlinked (e.g. by an atomic-save editor) while a
+// Docker single-file bind-mount still holds a reference to the old inode.
+// Returns a non-nil error if lstat fails or if nlink is non-zero.
+func isInodeUnlinked(path string) error {
+	cleanPath := filepath.Clean(strings.TrimSpace(path))
+
+	var st unix.Stat_t
+
+	err := unix.Lstat(cleanPath, &st)
+	if err != nil {
+		return fmt.Errorf("lstat %q: %w", cleanPath, err)
+	}
+
+	if st.Nlink != 0 {
+		return errInodeLinked
+	}
+
+	return nil
 }
 
 func fileSHA256Hex(path string) (string, error) {

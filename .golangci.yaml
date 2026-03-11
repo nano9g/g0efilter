@@ -23,3 +23,10 @@ linters:
           allow:
             - $gostd
             - g0efilter/internal/...
+    ireturn:
+      allow:
+        - anon
+        - error
+        - empty
+        - stdlib
+        - github.com/google/gopacket.Packet
