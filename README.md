@@ -116,7 +116,7 @@ allowlist:
 | `DNS_PORT`          | DNS listen port                                    | `53`                |
 | `DNS_UPSTREAMS`     | Upstream DNS servers (comma-separated). Uses Docker's default DNS if not specified | `127.0.0.11:53`     |
 | `DASHBOARD_HOST`    | Dashboard URL for log shipping                     | unset               |
-| `DASHBOARD_API_KEY` | API key for dashboard authentication               | unset               |
+| `DASHBOARD_API_KEY` | API key for dashboard authentication. Must match `API_KEY` set on the dashboard              | unset               |
 | `DASHBOARD_QUEUE_SIZE` | Queue size for buffering logs before sending to dashboard. Logs are dropped if queue is full | `1024` |
 | `DASHBOARD_START_DELAY` | Delay before starting dashboard log shipping (supports duration formats like `5s`, `1m`) | `5s` |
 | `LOG_FILE`          | Optional path for persistent log file              | unset               |
@@ -134,7 +134,7 @@ allowlist:
 | Variable        | Description                                                                                                       | Default |
 | --------------- | ----------------------------------------------------------------------------------------------------------------- | ------- |
 | `PORT`          | Address/port the dashboard listens on (HTTP UI + API). Can be just a port (`8081`) or address+port (`:8081`)     | `:8081` |
-| `API_KEY`       | API key used to authenticate incoming log data from the `g0efilter` container. Must match `DASHBOARD_API_KEY`    | unset   |
+| `API_KEY`       | API key used to authenticate incoming log data from the `g0efilter` container                                    | unset   |
 | `LOG_LEVEL`     | Log level (TRACE, DEBUG, INFO, WARN, ERROR)                                                                       | `INFO`  |
 | `BUFFER_SIZE`   | In-memory circular buffer capacity. Oldest events are dropped when full                                           | `5000`  |
 | `READ_LIMIT`    | Maximum events returned per API request. Should match `BUFFER_SIZE` so the UI can backfill the full buffer        | `5000`  |
