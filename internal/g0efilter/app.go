@@ -656,7 +656,7 @@ func fileNlink(path string) (uint32, error) {
 		return 0, fmt.Errorf("lstat %q: %w", cleanPath, err)
 	}
 
-	return st.Nlink, nil
+	return uint32(st.Nlink), nil //nolint:unconvert // Nlink is uint64 on amd64 Linux
 }
 
 func fileSHA256Hex(path string) (string, error) {

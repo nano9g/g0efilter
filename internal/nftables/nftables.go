@@ -599,7 +599,7 @@ type PacketInfo struct {
 
 // parseIPLayer decodes the IP layer from a raw packet payload.
 // Returns the parsed packet, source/destination IPs, protocol number, and whether parsing succeeded.
-func parseIPLayer(payload []byte) (gopacket.Packet, string, string, uint8, bool) { //nolint:ireturn
+func parseIPLayer(payload []byte) (gopacket.Packet, string, string, uint8, bool) {
 	switch payload[0] >> 4 {
 	case 4:
 		packet := gopacket.NewPacket(payload, layers.LayerTypeIPv4, gopacket.Default)
