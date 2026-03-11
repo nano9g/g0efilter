@@ -10,7 +10,7 @@ require (
 	github.com/miekg/dns v1.1.72
 	github.com/rs/zerolog v1.34.0
 	golang.org/x/net v0.51.0
-	golang.org/x/sys v0.41.0
+	golang.org/x/sys v0.42.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 )
 
