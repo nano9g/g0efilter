@@ -90,6 +90,13 @@ allowlist:
 
 > [!NOTE]
 > - The policy file supports live reloading: edits to policy.yaml automatically trigger rule and service updates without needing to restart the container. The internal g0efilter services are restarted, but the container itself remains running.
+>   **Important:** Mount a *directory* rather than a single file so live reload works with all editors.
+>   ```yaml
+>   volumes:
+>     - ./policy/:/app/policy/   # correct: directory mount
+>   # NOT: - ./policy.yaml:/app/policy.yaml  # broken with vim/emacs/most editors
+>   ```
+>   Editors that use atomic save (write temp file + rename) create a new inode on the host. A single-file Docker bind mount is pinned to the original inode and never reflects the new content, so no reload fires. Mounting the parent directory avoids this because the path is resolved at open-time, always reaching the current inode.
 > - If you do not need live reloading, you can use environment variables (ALLOWLIST_IPS, ALLOWLIST_DOMAINS) instead of a policy file. If both are present, environment variables take precedence.
 
 ### Environment variables
