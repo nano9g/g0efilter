@@ -230,7 +230,10 @@ services:
     image: docker.io/g0lab/g0efilter:latest
     container_name: g0efilter
     volumes:
-      - ./policy.yaml:/app/policy.yaml
+      # Mount the directory (not a single file) so live reload works with all editors.
+      # Editors like vim use atomic save (write + rename) which creates a new inode;
+      # a single-file bind mount stays pinned to the old inode and never sees updates.
+      - ./policy/:/app/policy/
     cap_drop:
       - ALL
     cap_add:
