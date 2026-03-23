@@ -116,6 +116,7 @@ changelog:
       - '(?i)^ci:'
       - '(?i)^dev:'
       - '(?i)^style:'
+      - '(?i)^lint:'
       - '(?i)merge conflict'
       - 'Merge pull request'
       - 'Merge branch'
