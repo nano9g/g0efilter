@@ -1317,10 +1317,10 @@ func TestAlertingDisabled(t *testing.T) {
 
 func TestAlertingOnlyBlockedEvents(t *testing.T) {
 	// Test that only BLOCKED events trigger notifications
-	var notificationCount int64
+	var notificationCount atomic.Int64
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		atomic.AddInt64(&notificationCount, 1)
+		notificationCount.Add(1)
 
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -1345,7 +1345,7 @@ func TestAlertingOnlyBlockedEvents(t *testing.T) {
 	}
 
 	for i, tc := range testCases {
-		atomic.StoreInt64(&notificationCount, 0)
+		notificationCount.Store(0)
 
 		// Use different IPs for each test case to avoid rate limiting
 		sourceIP := fmt.Sprintf("192.168.1.%d", i+1)
@@ -1360,7 +1360,7 @@ func TestAlertingOnlyBlockedEvents(t *testing.T) {
 		// Give some time for potential notification
 		time.Sleep(50 * time.Millisecond)
 
-		count := atomic.LoadInt64(&notificationCount)
+		count := notificationCount.Load()
 		if tc.expected && count == 0 {
 			t.Errorf("Expected notification for action %s but none received", tc.action)
 		}
