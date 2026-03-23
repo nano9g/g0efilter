@@ -5,6 +5,9 @@
 [![codecov](https://codecov.io/gh/g0lab/g0efilter/graph/badge.svg?token=owO27TfE79)](https://codecov.io/gh/g0lab/g0efilter)
 [![License](https://img.shields.io/github/license/g0lab/g0efilter.svg)](https://github.com/g0lab/g0efilter/blob/main/LICENSE)
 
+> [!NOTE]
+> Portions of this project were developed with the assistance of AI tools.
+
 > [!WARNING]
 > g0efilter is in active development and its configuration may change often.
 
