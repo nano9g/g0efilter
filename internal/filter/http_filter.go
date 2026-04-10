@@ -142,7 +142,7 @@ func logBlockedHTTP(
 	}
 
 	// Try to recover original dst so we can compute flow_id and emit synthetic redirect
-	destIP, destPort := getDestinationInfo(conn, tc, sourceIP, sourcePort, opts)
+	destIP, destPort := getDestinationInfo(conn, tc, host, sourceIP, sourcePort, opts)
 
 	// Emitting normalised fields for ingestion; include flow_id when available
 	logBlockedConnection(opts, componentHTTP, reason, host, conn, destIP, destPort)
@@ -152,13 +152,19 @@ func logBlockedHTTP(
 func getDestinationInfo(
 	conn net.Conn,
 	tc *net.TCPConn,
+	host string,
 	sourceIP string,
 	sourcePort int,
 	opts Options,
 ) (string, int) {
 	tgt, derr := originalDstTCP(tc)
 	if derr == nil {
-		_ = EmitSynthetic(opts.Logger, "http", conn, tgt)
+		// Only emit synthetic here when host is empty (no-Host case); valid host
+		// connections already had EmitSynthetic called in emitHTTPSyntheticEvent.
+		if host == "" {
+			_ = EmitSynthetic(opts.Logger, "http", conn, tgt)
+		}
+
 		destIP, destPort := parseHostPort(tgt)
 
 		return destIP, destPort

@@ -139,7 +139,12 @@ func logBlockedHTTPS(conn net.Conn, tc *net.TCPConn, sni string, opts Options) {
 
 	tgt, derr := originalDstTCP(tc)
 	if derr == nil {
-		_ = EmitSynthetic(opts.Logger, "https", conn, tgt)
+		// Only emit synthetic here for the no-SNI case; valid SNI connections
+		// already had EmitSynthetic called in extractSNIFromConnection.
+		if sni == "" {
+			_ = EmitSynthetic(opts.Logger, "https", conn, tgt)
+		}
+
 		destIP, destPort = parseHostPort(tgt)
 	} else if opts.Logger != nil {
 		opts.Logger.Debug("https.orig_dst_unavailable_for_blocked",
@@ -240,9 +245,9 @@ func readClientHello(r io.Reader) (*tls.ClientHelloInfo, error) {
 		GetConfigForClient: func(ch *tls.ClientHelloInfo) (*tls.Config, error) {
 			cp := *ch
 			hello = &cp
-			// SNI captured. Return nil to proceed; the handshake will fail
-			// immediately because roConn.Write is a no-op, which is expected.
-			return nil, nil
+			// SNI captured; nil signals "use outer config". Handshake fails on
+			// roConn.Write being a no-op, which is expected.
+			return nil, nil //nolint:nilnil
 		},
 	}).Handshake() //nolint:noctx
 	if hello == nil {
