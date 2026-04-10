@@ -240,11 +240,9 @@ func readClientHello(r io.Reader) (*tls.ClientHelloInfo, error) {
 		GetConfigForClient: func(ch *tls.ClientHelloInfo) (*tls.Config, error) {
 			cp := *ch
 			hello = &cp
-			// Return a config that enforces TLS1.2 minimum for the actual handshake.
-			// We capture the ClientHello above and then abort the handshake by
-			// returning a config; older clients will fail the handshake which is
-			// acceptable since we only need the ClientHello for SNI.
-			return &tls.Config{MinVersion: tls.VersionTLS12}, nil
+			// SNI captured. Return nil to proceed; the handshake will fail
+			// immediately because roConn.Write is a no-op, which is expected.
+			return nil, nil
 		},
 	}).Handshake() //nolint:noctx
 	if hello == nil {
