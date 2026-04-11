@@ -291,7 +291,7 @@ func (p *poster) handlePostPayload(ctx context.Context, payload []byte) {
 
 			return
 		default:
-			success := p.attemptPost(ctx, payload)
+			success := p.attemptPost(retryCtx, payload)
 			if success {
 				return
 			}

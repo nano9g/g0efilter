@@ -18,7 +18,6 @@ var (
 	errOriginalRead  = errors.New("original read error")
 	errOriginalClose = errors.New("original close error")
 	errPrimaryOp     = errors.New("primary operation failed")
-	errCloseExample  = errors.New("close failed")
 )
 
 // mockReadCloser implements io.ReadCloser for testing.
@@ -374,7 +373,7 @@ func ExampleCloseWithErr_preserveFirstError() {
 
 	// Successful primary operation (err is nil)
 	// But closer fails
-	closer := &mockCloser{closeErr: errCloseExample}
+	closer := &mockCloser{closeErr: errClose}
 	CloseWithErr(&err, closer)
 
 	// The close error is now stored in err
