@@ -5,10 +5,10 @@ go 1.26.2
 require (
 	github.com/florianl/go-nflog/v2 v2.3.0
 	github.com/go-chi/chi/v5 v5.2.5
-	github.com/goccy/go-yaml v1.19.2
 	github.com/google/gopacket v1.1.19
 	github.com/miekg/dns v1.1.72
 	github.com/rs/zerolog v1.35.0
+	go.yaml.in/yaml/v4 v4.0.0-rc.4
 	golang.org/x/net v0.53.0
 	golang.org/x/sys v0.43.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
