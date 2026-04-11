@@ -12,7 +12,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/goccy/go-yaml"
+	"go.yaml.in/yaml/v4"
 	"golang.org/x/net/idna"
 )
 
