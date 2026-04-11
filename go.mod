@@ -1,6 +1,6 @@
 module github.com/g0lab/g0efilter
 
-go 1.26.1
+go 1.26.2
 
 require (
 	github.com/florianl/go-nflog/v2 v2.3.0

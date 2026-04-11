@@ -38,10 +38,11 @@ func createDNSHandler(allowlist []string, opts Options) *dnsHandler {
 
 // setupDNSServers creates UDP and TCP DNS servers using the provided listen address and handler.
 func setupDNSServers(listenAddr string, handler *dnsHandler) (*dns.Server, *dns.Server) {
-	dns.HandleFunc(".", handler.handle)
+	mux := dns.NewServeMux()
+	mux.HandleFunc(".", handler.handle)
 
-	udpSrv := &dns.Server{Addr: listenAddr, Net: "udp"}
-	tcpSrv := &dns.Server{Addr: listenAddr, Net: "tcp"}
+	udpSrv := &dns.Server{Addr: listenAddr, Net: "udp", Handler: mux}
+	tcpSrv := &dns.Server{Addr: listenAddr, Net: "tcp", Handler: mux}
 
 	return udpSrv, tcpSrv
 }

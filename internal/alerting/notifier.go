@@ -137,10 +137,6 @@ func (n *Notifier) NotifyBlock(ctx context.Context, info BlockedConnectionInfo) 
 		return
 	}
 
-	if info.Component == "https" {
-		info.Component = "https"
-	}
-
 	if info.Component == "filter" {
 		info.Component = "tcp"
 	}
