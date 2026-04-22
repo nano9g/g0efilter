@@ -18,7 +18,7 @@ RUN go build -trimpath \
     -o /build/g0efilter ./cmd/g0efilter
 
 # Stage 2: Runtime
-FROM alpine:3.23.3
+FROM alpine:3.23.4
 
 RUN apk add --no-cache nftables ca-certificates \
     && update-ca-certificates
