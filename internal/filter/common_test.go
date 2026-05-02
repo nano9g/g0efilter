@@ -10,6 +10,8 @@ import (
 	"net"
 	"testing"
 	"time"
+
+	"github.com/g0lab/g0efilter/internal/actions"
 )
 
 // Test constants.
@@ -242,103 +244,6 @@ type malformedAddr struct{}
 func (m *malformedAddr) Network() string { return testTCPNetwork }
 func (m *malformedAddr) String() string  { return "malformed-address" }
 
-func TestFlowID(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name        string
-		srcIP       string
-		srcPort     int
-		destIP      string
-		destPort    int
-		expectedLen int
-	}{
-		{"IPv4 to IPv4", "192.168.1.1", 12345, "10.0.0.1", 80, 8},
-		{"IPv6 to IPv6", "::1", 8080, "::2", 443, 8},
-		{"Mixed addresses", "192.168.1.1", 0, "::1", 65535, 8},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			result := FlowID(tt.srcIP, tt.srcPort, tt.destIP, tt.destPort, "tcp")
-			if len(result) == 0 {
-				t.Error("FlowID returned empty string")
-			}
-
-			// Test consistency - same inputs should produce same result
-			result2 := FlowID(tt.srcIP, tt.srcPort, tt.destIP, tt.destPort, "tcp")
-			if result != result2 {
-				t.Error("FlowID should be consistent for same inputs")
-			}
-
-			// Test difference - different inputs should produce different result
-			result3 := FlowID(tt.srcIP, tt.srcPort+1, tt.destIP, tt.destPort, "tcp")
-			if result == result3 {
-				t.Error("FlowID should be different for different inputs")
-			}
-		})
-	}
-}
-
-func TestIsSyntheticRecent(t *testing.T) {
-	t.Parallel()
-
-	// Test marking and checking synthetic flows
-	flowID := FlowID("192.168.1.1", 12345, "10.0.0.1", 80, "tcp")
-
-	MarkSynthetic(flowID)
-
-	// Should be marked as synthetic
-	if !IsSyntheticRecent(flowID) {
-		t.Error("Expected flow to be marked as synthetic")
-	}
-
-	// Test with non-existent flow
-	nonExistentFlow := FlowID("1.1.1.1", 999, "2.2.2.2", 888, "tcp")
-	if IsSyntheticRecent(nonExistentFlow) {
-		t.Error("Expected non-existent flow to not be synthetic")
-	}
-
-	// Test after some time (synthetic status should persist for a short while)
-	if !IsSyntheticRecent(flowID) {
-		t.Error("Expected flow to still be marked as synthetic shortly after marking")
-	}
-
-	// Test edge cases
-	t.Run("empty flowID for MarkSynthetic", func(t *testing.T) {
-		t.Parallel()
-		// Should not panic
-		MarkSynthetic("")
-		t.Log("MarkSynthetic with empty flowID handled gracefully")
-	})
-
-	t.Run("empty flowID for IsSyntheticRecent", func(t *testing.T) {
-		t.Parallel()
-
-		if IsSyntheticRecent("") {
-			t.Error("Expected empty flowID to not be synthetic recent")
-		}
-	})
-
-	t.Run("multiple mark and check operations", func(t *testing.T) {
-		t.Parallel()
-
-		testFlowID := FlowID("10.10.10.10", 1111, "20.20.20.20", 2222, "tcp")
-
-		// Mark multiple times
-		MarkSynthetic(testFlowID)
-		MarkSynthetic(testFlowID)
-		MarkSynthetic(testFlowID)
-
-		// Should still be recent
-		if !IsSyntheticRecent(testFlowID) {
-			t.Error("Expected flow to be marked as synthetic after multiple marks")
-		}
-	})
-}
-
 func TestEmitSyntheticUDP(t *testing.T) {
 	t.Parallel()
 
@@ -462,7 +367,7 @@ func testEmitSyntheticUDPCase(t *testing.T, tt struct {
 			t.Error("Expected non-empty flow ID")
 		}
 		// Verify the flow is marked as synthetic
-		if !IsSyntheticRecent(result) {
+		if !actions.IsSyntheticRecent(result) {
 			t.Error("Expected emitted flow to be marked as synthetic")
 		}
 	} else if result != "" {
@@ -707,7 +612,7 @@ func testEmitSyntheticCase(t *testing.T, tt struct {
 			t.Error("Expected non-empty flow ID")
 		}
 		// Verify the flow is marked as synthetic
-		if !IsSyntheticRecent(result) {
+		if !actions.IsSyntheticRecent(result) {
 			t.Error("Expected emitted flow to be marked as synthetic")
 		}
 	} else if result != "" {

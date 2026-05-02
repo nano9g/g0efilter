@@ -34,12 +34,11 @@ func newRateLimiter(rps, burst float64) *rateLimiter {
 		last:        map[string]time.Time{},
 		rps:         rps,
 		burst:       burst,
-		maxEntries:  10000, // Prevent unlimited memory growth
+		maxEntries:  10000,
 		lastCleanup: time.Now(),
 	}
 }
 
-// Allow checks if a request from the given key (IP) is permitted under the rate limit.
 func (rl *rateLimiter) Allow(key string) bool {
 	now := time.Now()
 
@@ -54,7 +53,7 @@ func (rl *rateLimiter) Allow(key string) bool {
 		rl.lastCleanup = now
 
 		if before != after {
-			slog.Debug("rate_limiter.cleanup", //nolint:gosec // G706: all logged values are internal integers, not user input
+			slog.Debug("rate_limiter.cleanup",
 				"before", before,
 				"after", after,
 				"removed", before-after,
@@ -63,7 +62,7 @@ func (rl *rateLimiter) Allow(key string) bool {
 
 		// Warn if approaching max entries
 		if after > rl.maxEntries*8/10 {
-			slog.Warn("rate_limiter.high_memory", //nolint:gosec // G706: all logged values are internal integers, not user input
+			slog.Warn("rate_limiter.high_memory",
 				"entries", after,
 				"max_entries", rl.maxEntries,
 				"usage_percent", (after*100)/rl.maxEntries,
@@ -76,7 +75,6 @@ func (rl *rateLimiter) Allow(key string) bool {
 	last := rl.last[key]
 	dt := now.Sub(last).Seconds()
 
-	// Replenish tokens (cap at burst limit)
 	t += dt * rl.rps
 	if t > rl.burst {
 		t = rl.burst

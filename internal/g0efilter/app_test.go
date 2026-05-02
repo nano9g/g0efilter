@@ -5,8 +5,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -332,5 +335,265 @@ func TestHandleVersionFlag(t *testing.T) {
 				t.Errorf("HandleVersionFlag(%v) = %v, want %v", tt.args, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestIsInodeUnlinkedNonexistentPath(t *testing.T) {
+	t.Parallel()
+
+	err := isInodeUnlinked("/nonexistent/path/that/does/not/exist")
+	if err == nil {
+		t.Fatal("expected error for nonexistent path, got nil")
+	}
+}
+
+func TestIsInodeUnlinkedLinkedFile(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	p := filepath.Join(dir, "policy.yaml")
+
+	err := os.WriteFile(p, []byte("test"), 0o600)
+	if err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+
+	err = isInodeUnlinked(p)
+	if !errors.Is(err, errInodeLinked) {
+		t.Fatalf("expected errInodeLinked for existing file, got %v", err)
+	}
+}
+
+func TestIsInodeUnlinkedUnlinkedFile(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	f, err := os.CreateTemp(dir, "policy-*.yaml")
+	if err != nil {
+		t.Fatalf("create temp file: %v", err)
+	}
+
+	defer func() {
+		closeErr := f.Close()
+		if closeErr != nil {
+			t.Errorf("close temp file: %v", closeErr)
+		}
+	}()
+
+	p := f.Name()
+
+	// Remove the directory entry — lstat will fail (ENOENT), not return nlink=0
+	err = os.Remove(p)
+	if err != nil {
+		t.Fatalf("remove temp file: %v", err)
+	}
+
+	// Once removed, lstat fails (non-nil error, not errInodeLinked)
+	err = isInodeUnlinked(p)
+	if err == nil {
+		t.Fatal("expected error for removed path, got nil")
+	}
+
+	if errors.Is(err, errInodeLinked) {
+		t.Fatalf("expected lstat error, not errInodeLinked; got %v", err)
+	}
+}
+
+func TestFetchPendingUnblocksSuccess(t *testing.T) {
+	t.Parallel()
+
+	want := []unblockRequest{
+		{ID: "1", Type: "domain", Value: "example.com"},
+		{ID: "2", Type: "ip", Value: "1.2.3.4"},
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/unblocks" {
+			http.NotFound(w, r)
+
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(unblockResponse{Pending: want})
+	}))
+	defer srv.Close()
+
+	cfg := config{dashboardHost: srv.URL}
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	got, err := fetchPendingUnblocks(context.Background(), client, srv.URL, cfg, discardLogger())
+	if err != nil {
+		t.Fatalf("fetchPendingUnblocks: %v", err)
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("got %d unblocks, want %d", len(got), len(want))
+	}
+
+	for i, u := range got {
+		if u.ID != want[i].ID || u.Type != want[i].Type || u.Value != want[i].Value {
+			t.Errorf("unblock[%d] = %+v, want %+v", i, u, want[i])
+		}
+	}
+}
+
+func TestFetchPendingUnblocksEmptyResponse(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(unblockResponse{Pending: nil})
+	}))
+	defer srv.Close()
+
+	cfg := config{dashboardHost: srv.URL}
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	got, err := fetchPendingUnblocks(context.Background(), client, srv.URL, cfg, discardLogger())
+	if err != nil {
+		t.Fatalf("fetchPendingUnblocks: %v", err)
+	}
+
+	if len(got) != 0 {
+		t.Fatalf("expected empty slice, got %v", got)
+	}
+}
+
+func TestFetchPendingUnblocksNonOKStatus(t *testing.T) {
+	t.Parallel()
+
+	tests := []int{
+		http.StatusUnauthorized,
+		http.StatusForbidden,
+		http.StatusInternalServerError,
+		http.StatusServiceUnavailable,
+	}
+
+	for _, code := range tests {
+		t.Run(http.StatusText(code), func(t *testing.T) {
+			t.Parallel()
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(code)
+			}))
+			defer srv.Close()
+
+			cfg := config{dashboardHost: srv.URL}
+			client := &http.Client{Timeout: 5 * time.Second}
+
+			_, err := fetchPendingUnblocks(context.Background(), client, srv.URL, cfg, discardLogger())
+			if !errors.Is(err, errUnexpectedHTTPStatus) {
+				t.Fatalf("expected errUnexpectedHTTPStatus for %d, got %v", code, err)
+			}
+		})
+	}
+}
+
+func TestFetchPendingUnblocksMalformedJSON(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte("{not valid json"))
+	}))
+	defer srv.Close()
+
+	cfg := config{dashboardHost: srv.URL}
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	_, err := fetchPendingUnblocks(context.Background(), client, srv.URL, cfg, discardLogger())
+	if err == nil {
+		t.Fatal("expected error for malformed JSON, got nil")
+	}
+}
+
+func TestFetchPendingUnblocksAPIKey(t *testing.T) {
+	t.Parallel()
+
+	const wantKey = "secret-api-key"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Api-Key") != wantKey {
+			w.WriteHeader(http.StatusUnauthorized)
+
+			return
+		}
+
+		_ = json.NewEncoder(w).Encode(unblockResponse{})
+	}))
+	defer srv.Close()
+
+	cfg := config{dashboardHost: srv.URL, dashboardAPIKey: wantKey}
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	_, err := fetchPendingUnblocks(context.Background(), client, srv.URL, cfg, discardLogger())
+	if err != nil {
+		t.Fatalf("fetchPendingUnblocks with valid API key: %v", err)
+	}
+}
+
+func TestFetchPendingUnblocksHostnameQueryParam(t *testing.T) {
+	t.Parallel()
+
+	const wantHostname = "node-42"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("hostname") != wantHostname {
+			http.Error(w, "missing hostname", http.StatusBadRequest)
+
+			return
+		}
+
+		_ = json.NewEncoder(w).Encode(unblockResponse{})
+	}))
+	defer srv.Close()
+
+	cfg := config{dashboardHost: srv.URL, hostname: wantHostname}
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	_, err := fetchPendingUnblocks(context.Background(), client, srv.URL, cfg, discardLogger())
+	if err != nil {
+		t.Fatalf("fetchPendingUnblocks with hostname: %v", err)
+	}
+}
+
+func TestFetchPendingUnblocksNetworkError(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	srv.Close() // immediately close so the port is refused
+
+	cfg := config{dashboardHost: srv.URL}
+	client := &http.Client{Timeout: 500 * time.Millisecond}
+
+	_, err := fetchPendingUnblocks(context.Background(), client, srv.URL, cfg, discardLogger())
+	if err == nil {
+		t.Fatal("expected error for refused connection, got nil")
+	}
+}
+
+func TestFetchPendingUnblocksContextCancelled(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(1 * time.Second)
+
+		_ = json.NewEncoder(w).Encode(unblockResponse{})
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	cfg := config{dashboardHost: srv.URL}
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	_, err := fetchPendingUnblocks(ctx, client, srv.URL, cfg, discardLogger())
+	if err == nil {
+		t.Fatal("expected error for cancelled context, got nil")
 	}
 }

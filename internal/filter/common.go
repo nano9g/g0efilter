@@ -10,7 +10,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"io"
 	"log/slog"
 	"net"
@@ -21,6 +20,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/g0lab/g0efilter/internal/actions"
 	"golang.org/x/net/idna"
 	"golang.org/x/sys/unix"
 )
@@ -30,20 +30,14 @@ const (
 	defaultTTL            = 60              // DNS response TTL in seconds
 	connectionReadTimeout = 5 * time.Second // Timeout for initial connection reads
 
-	// ActionRedirected is logged when traffic is redirected.
-	ActionRedirected = "REDIRECTED"
-
-	// ModeHTTPS is the HTTPS-based filtering mode.
-	ModeHTTPS = "https"
-	// ModeDNS is the DNS-based filtering mode.
-	ModeDNS = "dns"
-
 	// Component names for logging.
 	componentHTTPS = "https"
 	componentHTTP  = "http"
 )
 
-var errListenAddrEmpty = errors.New("listenAddr cannot be empty")
+var (
+	errListenAddrEmpty = errors.New("listenAddr cannot be empty")
+)
 
 // Options contains configuration for network filtering.
 type Options struct {
@@ -123,7 +117,7 @@ func newMarkedDialer(dialTimeout time.Duration) *net.Dialer {
 			var serr error
 
 			err := rc.Control(func(fd uintptr) {
-				serr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_MARK, bypassMark) //nolint:gosec //G115
+				serr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_MARK, bypassMark)
 			})
 			if err != nil {
 				return fmt.Errorf("socket control error: %w", err)
@@ -327,23 +321,6 @@ func getOriginalDstV6(fd uintptr) (string, error) {
 	return buildHostPort(sa.Addr[:], sa.Port), nil
 }
 
-// FlowID generates a deterministic hash identifier for a network flow using source, destination, and protocol.
-func FlowID(sourceIP string, sourcePort int, destinationIP string, destinationPort int, proto string) string {
-	hasher := fnv.New32a()
-	// simple canonical representation - hash.Write never fails
-	_, _ = hasher.Write([]byte(sourceIP))
-	_, _ = hasher.Write([]byte(":"))
-	_, _ = hasher.Write([]byte(strconv.Itoa(sourcePort)))
-	_, _ = hasher.Write([]byte("->"))
-	_, _ = hasher.Write([]byte(destinationIP))
-	_, _ = hasher.Write([]byte(":"))
-	_, _ = hasher.Write([]byte(strconv.Itoa(destinationPort)))
-	_, _ = hasher.Write([]byte("|"))
-	_, _ = hasher.Write([]byte(strings.ToUpper(proto)))
-
-	return strconv.FormatUint(uint64(hasher.Sum32()), 16)
-}
-
 // parseHostPort splits a "host:port" string into host and port, returning the input as host and 0 on error.
 func parseHostPort(s string) (string, int) {
 	host, portStr, err := net.SplitHostPort(s)
@@ -372,62 +349,6 @@ func sourceAddr(conn net.Conn) (string, int) {
 	return conn.RemoteAddr().String(), 0
 }
 
-//nolint:gochecknoglobals
-var (
-	// recentSynthetic stores flow_id -> timestamp of last synthetic event to dedupe nflog events.
-	recentSynthetic = struct {
-		m      map[string]time.Time
-		mutex  sync.Mutex
-		writes int
-	}{m: make(map[string]time.Time)}
-)
-
-// suppressWindow is how long to suppress kernel nflog events after seeing a synthetic redirect.
-const suppressWindow = 5 * time.Second
-
-// pruneInterval controls how many writes between prune sweeps.
-const pruneInterval = 64
-
-// MarkSynthetic records that a synthetic log event was emitted for this flow to prevent duplicate nflog events.
-func MarkSynthetic(flowID string) {
-	if flowID == "" {
-		return
-	}
-
-	recentSynthetic.mutex.Lock()
-	defer recentSynthetic.mutex.Unlock()
-
-	recentSynthetic.m[flowID] = time.Now()
-	recentSynthetic.writes++
-
-	if recentSynthetic.writes >= pruneInterval {
-		recentSynthetic.writes = 0
-
-		cutoff := time.Now().Add(-suppressWindow * 4)
-		for k, v := range recentSynthetic.m {
-			if v.Before(cutoff) {
-				delete(recentSynthetic.m, k)
-			}
-		}
-	}
-}
-
-// IsSyntheticRecent returns true if a synthetic log was emitted for this flow within the suppress window.
-func IsSyntheticRecent(flowID string) bool {
-	if flowID == "" {
-		return false
-	}
-
-	recentSynthetic.mutex.Lock()
-	defer recentSynthetic.mutex.Unlock()
-
-	if lastTime, ok := recentSynthetic.m[flowID]; ok {
-		return time.Since(lastTime) <= suppressWindow
-	}
-
-	return false
-}
-
 // EmitSynthetic emits a synthetic nflog event for a TCP redirect and marks the flow to suppress duplicates.
 func EmitSynthetic(logger *slog.Logger, component string, conn net.Conn, target string) string {
 	if logger == nil || target == "" {
@@ -437,10 +358,10 @@ func EmitSynthetic(logger *slog.Logger, component string, conn net.Conn, target 
 	destIP, destPort := parseHostPort(target)
 	sourceIP, sourcePort := sourceAddr(conn)
 
-	flowID := FlowID(sourceIP, sourcePort, destIP, destPort, "tcp")
+	flowID := actions.FlowID(sourceIP, sourcePort, destIP, destPort, "tcp")
 	logger.Debug("nflog.synthetic",
 		"component", component,
-		"action", ActionRedirected,
+		"action", actions.ActionRedirected,
 		"protocol", "TCP",
 		"prefix", "redirected",
 		"source_ip", sourceIP,
@@ -451,7 +372,7 @@ func EmitSynthetic(logger *slog.Logger, component string, conn net.Conn, target 
 		"dst", destIP+":"+strconv.Itoa(destPort),
 		"flow_id", flowID,
 	)
-	MarkSynthetic(flowID)
+	actions.MarkSynthetic(flowID)
 
 	return flowID
 }
@@ -463,10 +384,10 @@ func EmitSyntheticUDP(logger *slog.Logger, component, sourceIP string, sourcePor
 	}
 
 	destIP, destPort := parseHostPort(dst)
-	flowID := FlowID(sourceIP, sourcePort, destIP, destPort, "udp")
+	flowID := actions.FlowID(sourceIP, sourcePort, destIP, destPort, "udp")
 	logger.Debug("nflog.synthetic",
 		"component", component,
-		"action", ActionRedirected,
+		"action", actions.ActionRedirected,
 		"protocol", "UDP",
 		"prefix", "dns_redirected",
 		"source_ip", sourceIP,
@@ -477,7 +398,7 @@ func EmitSyntheticUDP(logger *slog.Logger, component, sourceIP string, sourcePor
 		"dst", dst,
 		"flow_id", flowID,
 	)
-	MarkSynthetic(flowID)
+	actions.MarkSynthetic(flowID)
 
 	return flowID
 }
@@ -544,7 +465,7 @@ func logAllowedConnection(opts Options, component, target, identifier string, co
 
 	sourceIP, sourcePort := sourceAddr(conn)
 	destIP, destPort := parseHostPort(target)
-	flowID := FlowID(sourceIP, sourcePort, destIP, destPort, "tcp")
+	flowID := actions.FlowID(sourceIP, sourcePort, destIP, destPort, "tcp")
 
 	var identifierKey string
 
@@ -559,7 +480,7 @@ func logAllowedConnection(opts Options, component, target, identifier string, co
 
 	opts.Logger.Info(component+".allowed",
 		"component", component,
-		"action", "ALLOWED",
+		"action", actions.ActionAllowed,
 		identifierKey, identifier,
 		"source_ip", sourceIP,
 		"source_port", sourcePort,
@@ -579,7 +500,7 @@ func logBlockedConnection(
 	}
 
 	sourceIP, sourcePort := sourceAddr(conn)
-	flowID := FlowID(sourceIP, sourcePort, destIP, destPort, "tcp")
+	flowID := actions.FlowID(sourceIP, sourcePort, destIP, destPort, "tcp")
 
 	var identifierKey string
 
@@ -594,7 +515,7 @@ func logBlockedConnection(
 
 	fields := []any{
 		"component", component,
-		"action", "BLOCKED",
+		"action", actions.ActionBlocked,
 		identifierKey, identifier,
 		"reason", reason,
 		"source_ip", sourceIP,

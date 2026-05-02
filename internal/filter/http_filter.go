@@ -33,10 +33,8 @@ func handleHTTP(conn net.Conn, allowlist []string, opts Options) error {
 		return nil
 	}
 
-	// Parse and validate HTTP request
 	host, headBytes, br, parseErr := parseAndValidateHTTP(conn, tc, opts)
 
-	// Check if host is allowed
 	allowed := allowedHost(host, allowlist)
 	if opts.Logger != nil {
 		opts.Logger.Debug("http.allowlist_check", "host", host, "allowed", allowed)
@@ -49,11 +47,9 @@ func handleHTTP(conn net.Conn, allowlist []string, opts Options) error {
 		return nil
 	}
 
-	// Handle allowed host
 	return handleAllowedHTTP(conn, tc, host, headBytes, br, opts)
 }
 
-// parseAndValidateHTTP extracts and validates the HTTP Host header.
 func parseAndValidateHTTP(conn net.Conn, tc *net.TCPConn, opts Options) (string, []byte, *bufio.Reader, error) {
 	_ = conn.SetReadDeadline(time.Now().Add(connectionReadTimeout))
 	br := bufio.NewReader(conn)
@@ -62,10 +58,8 @@ func parseAndValidateHTTP(conn net.Conn, tc *net.TCPConn, opts Options) (string,
 
 	sourceIP, sourcePort := sourceAddr(conn)
 
-	// Validate and sanitize host
 	host = validateAndSanitizeHost(host, sourceIP, sourcePort, opts)
 
-	// Emit synthetic event if valid
 	if opts.Logger != nil && host != "" && err == nil {
 		emitHTTPSyntheticEvent(conn, tc, host, sourceIP, sourcePort, opts)
 	}
@@ -88,10 +82,9 @@ func validateAndSanitizeHost(host, sourceIP string, sourcePort int, opts Options
 		)
 	}
 
-	return "" // Treat invalid host as empty
+	return ""
 }
 
-// emitHTTPSyntheticEvent emits a synthetic nflog event for valid HTTP requests.
 func emitHTTPSyntheticEvent(conn net.Conn, tc *net.TCPConn, host, sourceIP string, sourcePort int, opts Options) {
 	target, targetErr := originalDstTCP(tc)
 	if targetErr == nil {
@@ -105,7 +98,6 @@ func emitHTTPSyntheticEvent(conn net.Conn, tc *net.TCPConn, host, sourceIP strin
 	)
 }
 
-// handleBlockedHTTP handles HTTP requests that are blocked.
 func handleBlockedHTTP(
 	conn net.Conn,
 	tc *net.TCPConn,
@@ -122,7 +114,6 @@ func handleBlockedHTTP(
 	}
 }
 
-// logBlockedHTTP logs blocked host information.
 func logBlockedHTTP(
 	conn net.Conn,
 	tc *net.TCPConn,
@@ -148,7 +139,6 @@ func logBlockedHTTP(
 	logBlockedConnection(opts, componentHTTP, reason, host, conn, destIP, destPort)
 }
 
-// getDestinationInfo recovers destination information for logging.
 func getDestinationInfo(
 	conn net.Conn,
 	tc *net.TCPConn,
@@ -182,7 +172,6 @@ func getDestinationInfo(
 	return "", 0
 }
 
-// handleAllowedHTTP handles allowed HTTP requests.
 func handleAllowedHTTP(
 	conn net.Conn,
 	tc *net.TCPConn,
@@ -191,7 +180,6 @@ func handleAllowedHTTP(
 	br *bufio.Reader,
 	opts Options,
 ) error {
-	// 2) Recover original destination (ip:port) before REDIRECT
 	target, err := originalDstTCP(tc)
 	if err != nil {
 		if opts.Logger != nil {
@@ -201,12 +189,10 @@ func handleAllowedHTTP(
 		return err
 	}
 
-	// Log allowed connection
 	if opts.Logger != nil {
 		logAllowedConnection(opts, componentHTTP, target, host, conn)
 	}
 
-	// 3) Connect and splice
 	backend, err := newDialerFromOptions(opts).Dial("tcp", target)
 	if err != nil {
 		logdstConnDialError(opts, componentHTTP, conn, target, err)
@@ -226,7 +212,6 @@ func handleAllowedHTTP(
 
 	setConnTimeouts(conn, backend, opts)
 
-	// Write collected header+body to the backend
 	if len(headBytes) > 0 {
 		_, writeErr := backend.Write(headBytes)
 		if writeErr != nil {

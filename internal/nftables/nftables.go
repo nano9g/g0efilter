@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/florianl/go-nflog/v2"
-	"github.com/g0lab/g0efilter/internal/filter"
+	"github.com/g0lab/g0efilter/internal/actions"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 )
@@ -53,7 +53,6 @@ func parsePort(s, name string) (int, error) {
 	return port, nil
 }
 
-// splitByFamily partitions a flat IP/CIDR allowlist into IPv4 and IPv6 slices.
 func splitByFamily(allowlist []string) ([]string, []string) {
 	var v4, v6 []string
 
@@ -152,7 +151,7 @@ func ApplyNftRulesWithContext(
 	dnsPortStr string) error {
 	mode := strings.ToLower(strings.TrimSpace(os.Getenv("FILTER_MODE")))
 	if mode == "" {
-		mode = filter.ModeHTTPS
+		mode = actions.ModeHTTPS
 	}
 
 	if len(allowlist) == 0 {
@@ -465,8 +464,8 @@ table ip6 g0efilter_nat_v6 {
 // v4 and v6 are pre-split IPv4 and IPv6 allowlist entries respectively.
 func GenerateNftRuleset(v4, v6 []string, httpsPort, httpPort, dnsPort int, mode string) string {
 	mode = strings.ToLower(mode)
-	if mode != filter.ModeDNS {
-		mode = filter.ModeHTTPS
+	if mode != actions.ModeDNS {
+		mode = actions.ModeHTTPS
 	}
 
 	allowSetV4 := strings.Join(v4, ", ")
@@ -476,14 +475,14 @@ func GenerateNftRuleset(v4, v6 []string, httpsPort, httpPort, dnsPort int, mode 
 
 	// Generate IPv4 rules
 	var filterRules string
-	if mode == filter.ModeDNS {
+	if mode == actions.ModeDNS {
 		filterRules = generateDNSFilterRules(allowSetV4, dnsPort)
 	} else {
 		filterRules = generateHTTPSFilterRules(allowSetV4, httpPort, httpsPort)
 	}
 
 	var natRules string
-	if mode == filter.ModeDNS {
+	if mode == actions.ModeDNS {
 		natRules = generateDNSNATRules(dnsPort)
 	} else {
 		natRules = generateHTTPSNATRules(allowSetV4, httpPort, httpsPort)
@@ -500,7 +499,7 @@ func GenerateNftRuleset(v4, v6 []string, httpsPort, httpPort, dnsPort int, mode 
 		allowSetV6 = "::1"
 	}
 
-	if mode == filter.ModeDNS {
+	if mode == actions.ModeDNS {
 		ruleset += "\n" + generateDNSFilterRulesV6(allowSetV6, dnsPort)
 		ruleset += "\n" + generateDNSNATRulesV6(dnsPort)
 	} else {
@@ -683,11 +682,11 @@ func mapPrefixToAction(prefix string) string {
 
 	switch {
 	case strings.Contains(pl, "redirect"):
-		return filter.ActionRedirected
+		return actions.ActionRedirected
 	case strings.Contains(pl, "block"):
-		return "BLOCKED"
+		return actions.ActionBlocked
 	case strings.Contains(pl, "allow"):
-		return "ALLOWED"
+		return actions.ActionAllowed
 	default:
 		return ""
 	}
@@ -741,7 +740,7 @@ func processActionEvent(
 	payloadLen int,
 ) {
 	// If we have a recent synthetic for this flow, suppress kernel nflog REDIRECTED to avoid duplicates
-	if action == filter.ActionRedirected && flowID != "" && filter.IsSyntheticRecent(flowID) {
+	if action == actions.ActionRedirected && flowID != "" && actions.IsSyntheticRecent(flowID) {
 		return // handled, skip logging
 	}
 
@@ -752,7 +751,7 @@ func processActionEvent(
 	fields = append(fields, "action", action)
 
 	// Level policy: REDIRECTED and ALLOWED at DEBUG, BLOCKED at INFO
-	if action == filter.ActionRedirected || action == "ALLOWED" {
+	if action == actions.ActionRedirected || action == actions.ActionAllowed {
 		lg.Debug("nflog.event", fields...)
 	} else {
 		lg.Info("nflog.event", fields...)
@@ -789,7 +788,7 @@ func createNflogHook(lg *slog.Logger) func(nflog.Attribute) int {
 		// Compute flow id
 		flowID := ""
 		if pkt.SourceIP != "" && pkt.DestinationIP != "" {
-			flowID = filter.FlowID(pkt.SourceIP, pkt.SourcePort, pkt.DestinationIP, pkt.DestinationPort, pkt.Protocol)
+			flowID = actions.FlowID(pkt.SourceIP, pkt.SourcePort, pkt.DestinationIP, pkt.DestinationPort, pkt.Protocol)
 		}
 
 		if action != "" {

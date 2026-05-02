@@ -33,13 +33,12 @@ type Notifier struct {
 
 // NewNotifier creates a new notification client. Returns nil if not configured.
 func NewNotifier() *Notifier {
-	// Alerting feature - can be removed if not needed
 	host := strings.TrimSpace(os.Getenv("NOTIFICATION_HOST"))
-	host = strings.TrimRight(host, "/") // avoid double slashes
+	host = strings.TrimRight(host, "/")
 	token := strings.TrimSpace(os.Getenv("NOTIFICATION_KEY"))
 
 	if host == "" || token == "" {
-		return nil // Notifications disabled
+		return nil
 	}
 
 	hostname := strings.TrimSpace(os.Getenv("HOSTNAME"))
@@ -52,7 +51,6 @@ func NewNotifier() *Notifier {
 		}
 	}
 
-	// Configure backoff period (default 60 seconds)
 	backoffPeriod := 60 * time.Second
 
 	if backoffEnv := strings.TrimSpace(os.Getenv("NOTIFICATION_BACKOFF_SECONDS")); backoffEnv != "" {
@@ -62,7 +60,6 @@ func NewNotifier() *Notifier {
 		}
 	}
 
-	// Load optional ignore list
 	ignoreList := loadIgnoreList()
 
 	return &Notifier{
@@ -102,10 +99,8 @@ func loadIgnoreList() []string {
 			continue
 		}
 
-		// Normalize: convert to lowercase for case-insensitive matching
 		domain = strings.ToLower(domain)
 
-		// Basic validation: reject patterns with whitespace
 		if strings.Contains(domain, " ") || strings.Contains(domain, "\t") {
 			continue
 		}
@@ -120,7 +115,7 @@ func loadIgnoreList() []string {
 	return patterns
 }
 
-// BlockedConnectionInfo contains details about a blocked connection.
+// BlockedConnectionInfo holds the details of a blocked connection used for alerting.
 type BlockedConnectionInfo struct {
 	SourceIP        string
 	SourcePort      string
@@ -141,14 +136,12 @@ func (n *Notifier) NotifyBlock(ctx context.Context, info BlockedConnectionInfo) 
 		info.Component = "tcp"
 	}
 
-	// Check if destination is in ignore list
 	if n.isIgnored(info.Destination) {
-		return // Skip notification for ignored domain
+		return
 	}
 
-	// Check rate limiting - don't spam the same alert
 	if !n.shouldSendAlert(info) {
-		return // Skip notification due to rate limiting
+		return
 	}
 
 	go n.sendNotification(ctx, info)
@@ -156,7 +149,6 @@ func (n *Notifier) NotifyBlock(ctx context.Context, info BlockedConnectionInfo) 
 
 // matchesPattern checks if a destination matches a pattern (supports wildcard prefix *.domain.com).
 func matchesPattern(destination, pattern string) bool {
-	// Exact match
 	if destination == pattern {
 		return true
 	}
@@ -171,7 +163,7 @@ func matchesPattern(destination, pattern string) bool {
 	return false
 }
 
-// Close releases notifier resources and stops sending new alerts.
+// Close stops the notifier and releases all resources.
 func (n *Notifier) Close() {
 	if n == nil {
 		return
@@ -182,19 +174,16 @@ func (n *Notifier) Close() {
 		n.client.CloseIdleConnections()
 	}
 
-	// Clean up rate limiting resources
 	n.mu.Lock()
 	n.recentAlerts = nil
 	n.mu.Unlock()
 }
 
-// isIgnored checks if a destination matches any pattern in the ignore list.
 func (n *Notifier) isIgnored(destination string) bool {
 	if len(n.ignoreList) == 0 || destination == "" {
 		return false
 	}
 
-	// Normalize destination for comparison
 	destination = strings.ToLower(destination)
 
 	for _, pattern := range n.ignoreList {
@@ -219,14 +208,12 @@ func (n *Notifier) shouldSendAlert(info BlockedConnectionInfo) bool {
 	// Clean up old entries periodically (older than 2x backoff period)
 	n.cleanupOldAlerts(now)
 
-	// Check if we've sent an alert for this connection recently
 	if lastSent, exists := n.recentAlerts[key]; exists {
 		if now.Sub(lastSent) < n.backoffPeriod {
-			return false // Still in backoff period
+			return false
 		}
 	}
 
-	// Update the last sent time
 	n.recentAlerts[key] = now
 
 	return true
@@ -246,7 +233,6 @@ func destKeyFor(info BlockedConnectionInfo) string {
 	}
 }
 
-// cleanupOldAlerts removes alert entries older than twice the backoff period to prevent memory leaks.
 func (n *Notifier) cleanupOldAlerts(now time.Time) {
 	if n.recentAlerts == nil {
 		return
@@ -260,7 +246,6 @@ func (n *Notifier) cleanupOldAlerts(now time.Time) {
 	}
 }
 
-// isIPOnlyDestination returns true if the destination has no domain name, only an IP address.
 func isIPOnlyDestination(destination, destinationIP, ipPort string) bool {
 	return destination == "" ||
 		destination == "unknown destination" ||
@@ -268,7 +253,6 @@ func isIPOnlyDestination(destination, destinationIP, ipPort string) bool {
 		destination == ipPort
 }
 
-// buildSourceString formats the source IP and port into an address string.
 func buildSourceString(sourceIP, sourcePort string) string {
 	if sourcePort != "" {
 		return fmt.Sprintf("%s:%s", sourceIP, sourcePort)
@@ -283,10 +267,9 @@ func buildDestinationString(info BlockedConnectionInfo) string {
 	if info.DestinationIP != "" && info.DestinationPort != "" {
 		ipPort := fmt.Sprintf("%s:%s", info.DestinationIP, info.DestinationPort)
 		if isIPOnlyDestination(destination, info.DestinationIP, ipPort) {
-			// No domain name available, use just IP:port
 			return ipPort
 		}
-		// Domain name available, format as "domain (IP:port)"
+
 		return fmt.Sprintf("%s (%s)", destination, ipPort)
 	}
 

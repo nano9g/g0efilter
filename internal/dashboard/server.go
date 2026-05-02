@@ -37,19 +37,15 @@ type Config struct {
 // Server holds all dependencies for HTTP handlers.
 type Server struct {
 	logger       *slog.Logger
-	store        LogStore         // Interface instead of concrete *memStore
-	broadcaster  EventBroadcaster // Interface instead of concrete *broadcaster
-	unblockStore UnblockStore     // Pending unblock requests
+	store        LogStore
+	broadcaster  EventBroadcaster
+	unblockStore UnblockStore // Pending unblock requests
 	apiKey       string
 	readLimit    int
 	bufferSize   int
 	sseRetry     time.Duration
-	rateLimiter  RateLimiter // Interface instead of concrete *rateLimiter
+	rateLimiter  RateLimiter
 }
-
-/* =========================
-   Types (log event)
-   ========================= */
 
 // LogEntry represents a single ingested or synthetic log event.
 type LogEntry struct {
@@ -82,14 +78,11 @@ type LogEntry struct {
 //
 //nolint:funlen // Function is clear and well-structured despite length
 func Run(ctx context.Context, cfg Config) error {
-	// Logger
 	lg := logging.NewWithContext(ctx, cfg.LogLevel, os.Stdout, cfg.Version)
 	slog.SetDefault(lg)
 
-	// Create server with all dependencies
 	srv := newServer(lg, cfg)
 
-	// HTTP server
 	httpSrv := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           srv.routes(),
@@ -154,10 +147,6 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 }
 
-/* =========================
-   Router & Middleware
-   ========================= */
-
 // newServer creates a new Server with all dependencies initialized.
 func newServer(lg *slog.Logger, cfg Config) *Server {
 	slog.Debug("dashboard.server_init",
@@ -186,7 +175,6 @@ func newServer(lg *slog.Logger, cfg Config) *Server {
 func (s *Server) routes() http.Handler {
 	r := chi.NewRouter()
 
-	// Global middleware stack
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
 	r.Use(s.securityHeadersMiddleware())

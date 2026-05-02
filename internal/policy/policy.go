@@ -51,7 +51,6 @@ func validateIP(ip string) error {
 		return fmt.Errorf("%w (contains port): %s", errInvalidIP, ip)
 	}
 
-	// CIDR
 	if strings.Contains(ip, "/") {
 		_, _, err := net.ParseCIDR(ip)
 		if err != nil {
@@ -61,7 +60,6 @@ func validateIP(ip string) error {
 		return nil
 	}
 
-	// Plain IP (IPv4 or IPv6)
 	parsed := net.ParseIP(ip)
 	if parsed == nil {
 		return fmt.Errorf("%w: %s", errInvalidIP, ip)
@@ -94,18 +92,15 @@ func validateDomain(domain string) error {
 	// Single trailing dot is fine
 	domain = strings.TrimSuffix(domain, ".")
 
-	// No other '*' anywhere
 	if strings.Contains(domain, "*") {
 		return fmt.Errorf("%w: %s", errInvalidDomain, orig)
 	}
 
-	// Convert to ASCII and perform basic structural checks
 	ascii, err := domainToASCII(domain, orig)
 	if err != nil {
 		return err
 	}
 
-	// Validate labels and TLD rules
 	err = validateDomainLabels(ascii, orig)
 	if err != nil {
 		return err
@@ -126,7 +121,6 @@ func domainToASCII(domain, orig string) (string, error) {
 		return "", fmt.Errorf("%w (IP literal): %s", errInvalidDomain, orig)
 	}
 
-	// Structure + length
 	if len(ascii) > maxDomainLength {
 		return "", fmt.Errorf("%w (too long): %s", errInvalidDomain, orig)
 	}
@@ -142,7 +136,6 @@ func domainToASCII(domain, orig string) (string, error) {
 	return ascii, nil
 }
 
-// validateDomainLabels validates each label in a domain for length, character set, and hyphen placement.
 func validateDomainLabels(ascii, orig string) error {
 	labels := strings.Split(ascii, ".")
 	for idx, label := range labels {
@@ -150,7 +143,6 @@ func validateDomainLabels(ascii, orig string) error {
 			return fmt.Errorf("%w (label length): %s", errInvalidDomain, orig)
 		}
 
-		// Validate characters in label
 		err := validateLabelChars(label, orig)
 		if err != nil {
 			return err
@@ -189,7 +181,6 @@ func validateLabelChars(label, orig string) error {
 	return nil
 }
 
-// isAllDigits returns true if the string contains only numeric digits.
 func isAllDigits(s string) bool {
 	for _, r := range s {
 		if r < '0' || r > '9' {
@@ -250,7 +241,6 @@ func loadConfig(file string) (Config, error) {
 func ReadPolicy(file string) ([]string, []string, error) {
 	lg := slog.Default()
 
-	// Try to load from environment variables first
 	envIPs := strings.TrimSpace(os.Getenv("ALLOWLIST_IPS"))
 	envDomains := strings.TrimSpace(os.Getenv("ALLOWLIST_DOMAINS"))
 
@@ -260,7 +250,6 @@ func ReadPolicy(file string) ([]string, []string, error) {
 		return loadFromEnv(lg, envIPs, envDomains)
 	}
 
-	// Fall back to file-based policy
 	lg.Debug("policy.read_start", "component", "policy", "source", "file", "file", strings.TrimSpace(file))
 
 	cfg, err := loadConfig(file)
@@ -298,22 +287,15 @@ func ReadPolicy(file string) ([]string, []string, error) {
 	return cleanIPs, cleanDomains, nil
 }
 
-// loadFromEnv loads and validates allowlist policy from environment variables.
-// ALLOWLIST_IPS and ALLOWLIST_DOMAINS are comma-separated lists.
 func loadFromEnv(lg *slog.Logger, envIPs, envDomains string) ([]string, []string, error) {
-	// Parse IPs from comma-separated list
 	rawIPs := parseCommaSeparated(envIPs)
-
-	// Parse domains from comma-separated list
 	rawDomains := parseCommaSeparated(envDomains)
 
-	// Validate IPs
 	cleanIPs, err := validateIPs(lg, "env:ALLOWLIST_IPS", rawIPs)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	// Validate domains
 	cleanDomains, err := validateDomains(lg, "env:ALLOWLIST_DOMAINS", rawDomains)
 	if err != nil {
 		return nil, nil, err
@@ -338,7 +320,6 @@ func loadFromEnv(lg *slog.Logger, envIPs, envDomains string) ([]string, []string
 	return cleanIPs, cleanDomains, nil
 }
 
-// parseCommaSeparated parses a comma-separated string into a slice, trimming whitespace.
 func parseCommaSeparated(input string) []string {
 	if input == "" {
 		return nil
@@ -357,7 +338,6 @@ func parseCommaSeparated(input string) []string {
 	return result
 }
 
-// validateIPs validates and filters a list of IP addresses, logging and rejecting invalid entries.
 func validateIPs(lg *slog.Logger, file string, ips []string) ([]string, error) {
 	cleanIPs := make([]string, 0, len(ips))
 
@@ -388,7 +368,6 @@ func validateIPs(lg *slog.Logger, file string, ips []string) ([]string, error) {
 	return cleanIPs, nil
 }
 
-// validateDomains validates and filters a list of domain patterns, logging and rejecting invalid entries.
 func validateDomains(lg *slog.Logger, file string, domains []string) ([]string, error) {
 	cleanDomains := make([]string, 0, len(domains))
 

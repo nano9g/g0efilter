@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/g0lab/g0efilter/internal/actions"
 	"github.com/g0lab/g0efilter/internal/logging"
 )
 
@@ -19,10 +20,8 @@ func (s *Server) processPayloads(ctx context.Context, payloads []map[string]any,
 	isProbe := false
 
 	for _, in := range payloads {
-		// Sanitize domain/hostname fields before processing
 		SanitizePayloadFields(in)
 
-		// Check if this is a probe message
 		if msg, ok := in["msg"].(string); ok && (msg == "_dashboard_probe" || strings.HasPrefix(msg, "_dashboard_")) {
 			isProbe = true
 		}
@@ -42,7 +41,7 @@ func (s *Server) processPayloads(ctx context.Context, payloads []map[string]any,
 		}
 
 		entry.ID = id
-		results = append(results, map[string]any{"id": id, "status": "ok"})
+		results = append(results, map[string]any{"id": id, keyStatus: "ok"})
 
 		s.logger.Log(ctx, logging.LevelTrace, "log.stored",
 			"id", id,
@@ -102,7 +101,7 @@ func (s *Server) processPayload(ctx context.Context, in map[string]any, remoteIP
 	action, _ := in["action"].(string)
 
 	act := strings.ToUpper(strings.TrimSpace(action))
-	if act != "ALLOWED" && act != "BLOCKED" {
+	if act != actions.ActionAllowed && act != actions.ActionBlocked {
 		s.logger.Debug("payload.rejected",
 			"remote", remoteIP,
 			"action", action,
@@ -113,7 +112,6 @@ func (s *Server) processPayload(ctx context.Context, in map[string]any, remoteIP
 		return nil
 	}
 
-	// Parse timestamp
 	ts := time.Now().UTC()
 
 	if tval, ok := in["time"].(string); ok && tval != "" {
@@ -123,7 +121,6 @@ func (s *Server) processPayload(ctx context.Context, in map[string]any, remoteIP
 		}
 	}
 
-	// Build fields JSON
 	fieldsMap := extractFieldsMap(in)
 
 	fieldsRaw, err := json.Marshal(fieldsMap)
@@ -151,7 +148,7 @@ func (s *Server) processPayload(ctx context.Context, in map[string]any, remoteIP
 		TenantID:        getStringFromPayload(in, "tenant_id"),
 		SourceIP:        getStringFromPayload(in, "source_ip"),
 		DestinationIP:   getStringFromPayload(in, "destination_ip"),
-		HTTPS:           getStringFromPayload(in, "http_host", "host", "https", "qname"),
+		HTTPS:           getStringFromPayload(in, "http_host", "host", keyHTTPS, "qname"),
 		HTTPHost:        getStringFromPayload(in, "http_host", "host"),
 		PayloadLen:      getIntFromPayload(in, "payload_len"),
 		SourcePort:      getIntFromPayload(in, "source_port"),
@@ -175,7 +172,7 @@ func extractFieldsMap(in map[string]any) map[string]any {
 	// Merge top-level fields
 	for _, k := range []string{"action", "component", "protocol", "policy_hit", "payload_len",
 		"reason", "tenant_id", "flow_id", "hostname", "source_ip", "source_port",
-		"destination_ip", "destination_port", "src", "dst", "http_host", "host", "https", "qname", "qtype", "version"} {
+		"destination_ip", "destination_port", "src", "dst", "http_host", "host", keyHTTPS, "qname", "qtype", "version"} {
 		if v, ok := in[k]; ok && v != nil {
 			fieldsMap[k] = v
 		}
@@ -184,7 +181,6 @@ func extractFieldsMap(in map[string]any) map[string]any {
 	return fieldsMap
 }
 
-// deriveProtocol determines the protocol from the payload.
 func deriveProtocol(in map[string]any) string {
 	protocol, _ := in["protocol"].(string)
 	if protocol != "" {
@@ -193,7 +189,7 @@ func deriveProtocol(in map[string]any) string {
 
 	if comp, ok := in["component"].(string); ok {
 		switch strings.ToLower(comp) {
-		case "http", "https":
+		case "http", keyHTTPS:
 			return "TCP"
 		case "dns":
 			return "UDP"
@@ -214,7 +210,6 @@ func getStringFromPayload(in map[string]any, keys ...string) string {
 	return ""
 }
 
-// getIntFromPayload gets float64 as int from payload.
 func getIntFromPayload(in map[string]any, key string) int {
 	if v, ok := in[key].(float64); ok {
 		return int(v)
@@ -240,7 +235,6 @@ func SanitizeDomainField(value string) string {
 		return invalidDomainPlaceholder
 	}
 
-	// Limit length to prevent memory issues
 	const maxFieldLength = 255
 	if len(value) > maxFieldLength {
 		return invalidDomainPlaceholder
@@ -277,7 +271,7 @@ func SanitizePayloadFields(payload map[string]any) {
 	domainFields := []string{
 		"host",      // HTTP Host header
 		"http_host", // HTTP Host header (alternative key)
-		"https",     // HTTPS SNI
+		keyHTTPS,    // HTTPS SNI
 		"qname",     // DNS query name
 		"hostname",  // Generic hostname
 		"domain",    // Generic domain

@@ -3,11 +3,12 @@ package dashboard
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"strings"
 	"sync"
 	"time"
 )
 
-// UnblockRequest represents a pending unblock request.
+// UnblockRequest represents a pending request to remove a block rule.
 //
 //nolint:tagliatelle // JSON uses snake_case for API compatibility
 type UnblockRequest struct {
@@ -18,7 +19,7 @@ type UnblockRequest struct {
 	CreatedAt      time.Time `json:"created_at"`
 }
 
-// CompletedUnblock represents an acknowledged (completed) unblock.
+// CompletedUnblock records an unblock operation that has been acknowledged and applied.
 //
 //nolint:tagliatelle // JSON uses snake_case for API compatibility
 type CompletedUnblock struct {
@@ -30,19 +31,13 @@ type CompletedUnblock struct {
 
 // UnblockStore manages pending unblock requests with thread-safe operations.
 type UnblockStore interface {
-	// Add queues a new unblock request and returns its ID.
 	Add(reqType, value, targetHostname string) string
-	// GetPending returns all pending unblock requests.
 	GetPending() []UnblockRequest
-	// GetPendingForHost returns pending requests for a specific hostname (or all if hostname matches).
 	GetPendingForHost(hostname string) []UnblockRequest
-	// Acknowledge marks a request as processed and moves it to completed.
 	Acknowledge(id string) bool
-	// GetCompleted returns all completed unblocks.
 	GetCompleted() []CompletedUnblock
 }
 
-// memUnblockStore is an in-memory implementation of UnblockStore.
 type memUnblockStore struct {
 	mu         sync.RWMutex
 	requests   map[string]UnblockRequest
@@ -50,7 +45,6 @@ type memUnblockStore struct {
 	maxPending int
 }
 
-// newUnblockStore creates a new in-memory unblock store.
 func newUnblockStore() *memUnblockStore {
 	return &memUnblockStore{
 		requests:   make(map[string]UnblockRequest),
@@ -59,15 +53,16 @@ func newUnblockStore() *memUnblockStore {
 	}
 }
 
-// Add queues a new unblock request and returns its ID.
 func (s *memUnblockStore) Add(reqType, value, targetHostname string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	targetHostname = strings.ToLower(strings.TrimSpace(targetHostname))
+
 	// Check for duplicate pending requests (same type, value, and target)
 	for _, req := range s.requests {
 		if req.Type == reqType && req.Value == value && req.TargetHostname == targetHostname {
-			return req.ID // Return existing request ID
+			return req.ID
 		}
 	}
 
@@ -89,7 +84,6 @@ func (s *memUnblockStore) Add(reqType, value, targetHostname string) string {
 	return id
 }
 
-// GetPending returns all pending unblock requests.
 func (s *memUnblockStore) GetPending() []UnblockRequest {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -108,6 +102,8 @@ func (s *memUnblockStore) GetPendingForHost(hostname string) []UnblockRequest {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	hostname = strings.ToLower(strings.TrimSpace(hostname))
+
 	result := make([]UnblockRequest, 0, len(s.requests))
 	for _, req := range s.requests {
 		// Match if target is empty (all hosts) or matches specific hostname
@@ -119,14 +115,12 @@ func (s *memUnblockStore) GetPendingForHost(hostname string) []UnblockRequest {
 	return result
 }
 
-// Acknowledge marks a request as processed and moves it to completed.
 func (s *memUnblockStore) Acknowledge(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	req, exists := s.requests[id]
 	if exists {
-		// Move to completed list
 		s.completed = append(s.completed, CompletedUnblock{
 			Type:           req.Type,
 			Value:          req.Value,
@@ -147,7 +141,6 @@ func (s *memUnblockStore) Acknowledge(id string) bool {
 	return false
 }
 
-// GetCompleted returns all completed unblocks.
 func (s *memUnblockStore) GetCompleted() []CompletedUnblock {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
