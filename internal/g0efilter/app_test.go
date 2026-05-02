@@ -562,11 +562,15 @@ func TestFetchPendingUnblocksHostnameQueryParam(t *testing.T) {
 func TestFetchPendingUnblocksNetworkError(t *testing.T) {
 	t.Parallel()
 
-	// Point at a port that refuses connections
-	cfg := config{dashboardHost: "http://127.0.0.1:1"}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	srv.Close() // immediately close so the port is refused
+
+	cfg := config{dashboardHost: srv.URL}
 	client := &http.Client{Timeout: 500 * time.Millisecond}
 
-	_, err := fetchPendingUnblocks(context.Background(), client, "http://127.0.0.1:1", cfg, discardLogger())
+	_, err := fetchPendingUnblocks(context.Background(), client, srv.URL, cfg, discardLogger())
 	if err == nil {
 		t.Fatal("expected error for refused connection, got nil")
 	}

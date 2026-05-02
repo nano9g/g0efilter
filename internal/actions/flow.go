@@ -23,7 +23,7 @@ const pruneInterval = 64
 
 // FlowID generates a deterministic hash identifier for a network flow using source, destination, and protocol.
 func FlowID(sourceIP string, sourcePort int, destinationIP string, destinationPort int, proto string) string {
-	hasher := fnv.New32a()
+	hasher := fnv.New64a()
 	_, _ = hasher.Write([]byte(sourceIP))
 	_, _ = hasher.Write([]byte(":"))
 	_, _ = hasher.Write([]byte(strconv.Itoa(sourcePort)))
@@ -34,7 +34,7 @@ func FlowID(sourceIP string, sourcePort int, destinationIP string, destinationPo
 	_, _ = hasher.Write([]byte("|"))
 	_, _ = hasher.Write([]byte(strings.ToUpper(proto)))
 
-	return strconv.FormatUint(uint64(hasher.Sum32()), 16)
+	return strconv.FormatUint(hasher.Sum64(), 16)
 }
 
 // MarkSynthetic records that a synthetic log event was emitted for this flow to prevent duplicate nflog events.

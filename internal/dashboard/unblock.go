@@ -3,6 +3,7 @@ package dashboard
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"strings"
 	"sync"
 	"time"
 )
@@ -56,6 +57,8 @@ func (s *memUnblockStore) Add(reqType, value, targetHostname string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	targetHostname = strings.ToLower(strings.TrimSpace(targetHostname))
+
 	// Check for duplicate pending requests (same type, value, and target)
 	for _, req := range s.requests {
 		if req.Type == reqType && req.Value == value && req.TargetHostname == targetHostname {
@@ -98,6 +101,8 @@ func (s *memUnblockStore) GetPending() []UnblockRequest {
 func (s *memUnblockStore) GetPendingForHost(hostname string) []UnblockRequest {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
+	hostname = strings.ToLower(strings.TrimSpace(hostname))
 
 	result := make([]UnblockRequest, 0, len(s.requests))
 	for _, req := range s.requests {
