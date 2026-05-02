@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/g0lab/g0efilter/internal/actions"
 	"github.com/g0lab/g0efilter/internal/logging"
 )
 
@@ -102,7 +103,7 @@ func (s *Server) processPayload(ctx context.Context, in map[string]any, remoteIP
 	action, _ := in["action"].(string)
 
 	act := strings.ToUpper(strings.TrimSpace(action))
-	if act != logging.ActionAllowed && act != logging.ActionBlocked {
+	if act != actions.ActionAllowed && act != actions.ActionBlocked {
 		s.logger.Debug("payload.rejected",
 			"remote", remoteIP,
 			"action", action,

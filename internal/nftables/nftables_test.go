@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/florianl/go-nflog/v2"
-	"github.com/g0lab/g0efilter/internal/filter"
+	"github.com/g0lab/g0efilter/internal/actions"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 )
@@ -779,16 +779,16 @@ func TestConstants(t *testing.T) {
 	t.Parallel()
 
 	// Test that constants have expected values
-	if filter.ActionRedirected != "REDIRECTED" {
-		t.Errorf("Expected ActionRedirected to be 'REDIRECTED', got %s", filter.ActionRedirected)
+	if actions.ActionRedirected != "REDIRECTED" {
+		t.Errorf("Expected ActionRedirected to be 'REDIRECTED', got %s", actions.ActionRedirected)
 	}
 
-	if filter.ModeHTTPS != "https" {
-		t.Errorf("Expected ModeHTTPS to be 'https', got %s", filter.ModeHTTPS)
+	if actions.ModeHTTPS != "https" {
+		t.Errorf("Expected ModeHTTPS to be 'https', got %s", actions.ModeHTTPS)
 	}
 
-	if filter.ModeDNS != "dns" {
-		t.Errorf("Expected ModeDNS to be 'dns', got %s", filter.ModeDNS)
+	if actions.ModeDNS != "dns" {
+		t.Errorf("Expected ModeDNS to be 'dns', got %s", actions.ModeDNS)
 	}
 
 	if minPacketSize != 20 {

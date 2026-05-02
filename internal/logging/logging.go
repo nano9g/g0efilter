@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/g0lab/g0efilter/internal/actions"
 	"github.com/g0lab/g0efilter/internal/alerting"
 	"github.com/g0lab/g0efilter/internal/safeio"
 	"github.com/rs/zerolog"
@@ -40,12 +41,6 @@ func setGlobalLogger(zl zerolog.Logger) {
 const (
 	// LevelTrace is below slog.LevelDebug.
 	LevelTrace slog.Level = -8
-
-	// ActionAllowed is the action string for allowed connections.
-	ActionAllowed = "ALLOWED"
-
-	// ActionBlocked is the action string for blocked connections.
-	ActionBlocked = "BLOCKED"
 
 	// Log attribute key names used across the dashboard pipeline.
 	keyAction          = "action"
@@ -570,7 +565,7 @@ func (z *zerologHandler) Handle(ctx context.Context, record slog.Record) error {
 	}
 
 	// Alerting feature - send notifications for BLOCKED events
-	if z.notifier != nil && act == ActionBlocked {
+	if z.notifier != nil && act == actions.ActionBlocked {
 		handleBlockedAlert(ctx, z.notifier, attrs)
 	}
 
@@ -609,13 +604,13 @@ func logToTerminal(zl zerolog.Logger, level slog.Level, msg string, attrs map[st
 func shouldShipToDashboard(act string, attrs map[string]any) bool {
 	// Only ship BLOCKED and ALLOWED actions
 	// REDIRECTED stays in console logs only (debug level)
-	if act != ActionBlocked && act != ActionAllowed {
+	if act != actions.ActionBlocked && act != actions.ActionAllowed {
 		return false
 	}
 
 	// Skip ALLOWED actions from nftables (allowlisted IPs with component=nflog)
 	// Keep ALLOWED from HTTPS/HTTP/DNS filters (domain matches with wildcards)
-	if act == ActionAllowed {
+	if act == actions.ActionAllowed {
 		component := ""
 		if v, ok := attrs[keyComponent]; ok {
 			component = strings.ToLower(fmt.Sprint(v))
@@ -640,7 +635,7 @@ func extractAction(attrs map[string]any) string {
 
 // isAllowlistedIP checks if an event is an ALLOWED action for an allowlisted IP (from nftables).
 func isAllowlistedIP(act string, attrs map[string]any) bool {
-	if act != ActionAllowed {
+	if act != actions.ActionAllowed {
 		return false
 	}
 

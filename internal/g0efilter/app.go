@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/g0lab/g0efilter/internal/actions"
 	"github.com/g0lab/g0efilter/internal/filter"
 	"github.com/g0lab/g0efilter/internal/logging"
 	"github.com/g0lab/g0efilter/internal/nftables"
@@ -317,11 +318,11 @@ func logStartupInfo(lg *slog.Logger, cfg config, version, date, commit string) {
 
 	lg.Info("startup.info", kv...)
 
-	if cfg.mode == filter.ModeHTTPS {
+	if cfg.mode == actions.ModeHTTPS {
 		lg.Debug("startup.ports", "http_port", cfg.httpPort, "https_port", cfg.httpsPort)
 	}
 
-	if cfg.mode == filter.ModeDNS {
+	if cfg.mode == actions.ModeDNS {
 		lg.Debug("startup.ports", "dns_port", cfg.dnsPort)
 	}
 }
@@ -353,26 +354,26 @@ func logNotificationInfo(lg *slog.Logger, cfg config) {
 
 func normalizeMode(cfg config, lg *slog.Logger) config {
 	switch cfg.mode {
-	case filter.ModeHTTPS, filter.ModeDNS:
+	case actions.ModeHTTPS, actions.ModeDNS:
 		return cfg
 	case "":
-		cfg.mode = filter.ModeHTTPS
+		cfg.mode = actions.ModeHTTPS
 
 		return cfg
 	default:
-		lg.Warn("filter_mode.invalid", "mode", cfg.mode, "defaulting_to", filter.ModeHTTPS)
-		cfg.mode = filter.ModeHTTPS
+		lg.Warn("filter_mode.invalid", "mode", cfg.mode, "defaulting_to", actions.ModeHTTPS)
+		cfg.mode = actions.ModeHTTPS
 
 		return cfg
 	}
 }
 
 func validatePorts(cfg config, lg *slog.Logger) error {
-	if cfg.mode == filter.ModeHTTPS && cfg.httpPort == cfg.httpsPort {
+	if cfg.mode == actions.ModeHTTPS && cfg.httpPort == cfg.httpsPort {
 		return fmt.Errorf("%w: HTTP_PORT and HTTPS_PORT cannot be the same (%s)", errPortConflict, cfg.httpPort)
 	}
 
-	if cfg.mode == filter.ModeDNS {
+	if cfg.mode == actions.ModeDNS {
 		if cfg.dnsPort == cfg.httpPort {
 			lg.Warn(
 				"config.port_overlap",
@@ -460,7 +461,7 @@ func startServices(ctx context.Context, cfg config, domains []string, lg *slog.L
 	}
 
 	switch cfg.mode {
-	case filter.ModeDNS:
+	case actions.ModeDNS:
 		startDNSService(ctx, cfg.dnsPort, domains, opts, lg)
 	default:
 		startHTTPSServices(ctx, cfg, domains, opts, lg)
