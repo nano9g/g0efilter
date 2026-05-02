@@ -8,7 +8,7 @@ on:
 
 concurrency:
   group: release-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -36,7 +36,6 @@ jobs:
           check-latest: true
           cache: true
 
-      # CI validation steps
       - name: go mod tidy check
         run: |
           go mod tidy
@@ -44,9 +43,6 @@ jobs:
 
       - name: go vet
         run: go vet ./...
-
-      - name: Install dependencies
-        run: go mod download
 
       - name: Run tests
         run: go test -race -covermode=atomic -coverprofile=coverage.txt ./...
@@ -59,7 +55,6 @@ jobs:
             --timeout=10m
             ./...
 
-      # Release steps (only run if everything above passed)
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
 
@@ -79,7 +74,7 @@ jobs:
         uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
-          version: latest
+          version: "~> v2"
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

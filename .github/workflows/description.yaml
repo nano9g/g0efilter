@@ -1,5 +1,5 @@
 ---
-name: dockerhub-description
+name: Update Dockerhub Description
 
 on:
   push:
