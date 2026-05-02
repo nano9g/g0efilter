@@ -54,7 +54,7 @@ func (rl *rateLimiter) Allow(key string) bool {
 		rl.lastCleanup = now
 
 		if before != after {
-			slog.Debug("rate_limiter.cleanup", //nolint:gosec // G706: all logged values are internal integers, not user input
+			slog.Debug("rate_limiter.cleanup",
 				"before", before,
 				"after", after,
 				"removed", before-after,
@@ -63,7 +63,7 @@ func (rl *rateLimiter) Allow(key string) bool {
 
 		// Warn if approaching max entries
 		if after > rl.maxEntries*8/10 {
-			slog.Warn("rate_limiter.high_memory", //nolint:gosec // G706: all logged values are internal integers, not user input
+			slog.Warn("rate_limiter.high_memory",
 				"entries", after,
 				"max_entries", rl.maxEntries,
 				"usage_percent", (after*100)/rl.maxEntries,

@@ -44,6 +44,17 @@ const (
 	// ActionAllowed is the action string for allowed connections.
 	ActionAllowed = "ALLOWED"
 
+	// ActionBlocked is the action string for blocked connections.
+	ActionBlocked = "BLOCKED"
+
+	// Log attribute key names used across the dashboard pipeline.
+	keyAction          = "action"
+	keyComponent       = "component"
+	keyHostname        = "hostname"
+	keyHost            = "host"
+	keyDestinationPort = "destination_port"
+	keyTime            = "time"
+
 	defaultQueueSize         = 1024
 	defaultWorkers           = 3               // number of concurrent workers
 	defaultRetryTimeout      = 5 * time.Second // max time to retry a single POST
@@ -216,8 +227,8 @@ func (p *poster) Enqueue(payload []byte) {
 
 func (p *poster) Probe(ctx context.Context) error {
 	probe := map[string]any{
-		"time": time.Now().UTC().Format(time.RFC3339Nano),
-		"msg":  "_dashboard_probe",
+		keyTime: time.Now().UTC().Format(time.RFC3339Nano),
+		"msg":   "_dashboard_probe",
 	}
 
 	payload, err := json.Marshal(probe)
@@ -559,7 +570,7 @@ func (z *zerologHandler) Handle(ctx context.Context, record slog.Record) error {
 	}
 
 	// Alerting feature - send notifications for BLOCKED events
-	if z.notifier != nil && act == "BLOCKED" {
+	if z.notifier != nil && act == ActionBlocked {
 		handleBlockedAlert(ctx, z.notifier, attrs)
 	}
 
@@ -598,7 +609,7 @@ func logToTerminal(zl zerolog.Logger, level slog.Level, msg string, attrs map[st
 func shouldShipToDashboard(act string, attrs map[string]any) bool {
 	// Only ship BLOCKED and ALLOWED actions
 	// REDIRECTED stays in console logs only (debug level)
-	if act != "BLOCKED" && act != ActionAllowed {
+	if act != ActionBlocked && act != ActionAllowed {
 		return false
 	}
 
@@ -606,7 +617,7 @@ func shouldShipToDashboard(act string, attrs map[string]any) bool {
 	// Keep ALLOWED from HTTPS/HTTP/DNS filters (domain matches with wildcards)
 	if act == ActionAllowed {
 		component := ""
-		if v, ok := attrs["component"]; ok {
+		if v, ok := attrs[keyComponent]; ok {
 			component = strings.ToLower(fmt.Sprint(v))
 		}
 		// Skip nflog (nftables IP-based allows)
@@ -620,7 +631,7 @@ func shouldShipToDashboard(act string, attrs map[string]any) bool {
 
 // extractAction extracts the action string from attributes.
 func extractAction(attrs map[string]any) string {
-	if v, ok := attrs["action"]; ok {
+	if v, ok := attrs[keyAction]; ok {
 		return strings.ToUpper(fmt.Sprint(v))
 	}
 
@@ -634,7 +645,7 @@ func isAllowlistedIP(act string, attrs map[string]any) bool {
 	}
 
 	// nflog component indicates IP-based allow from nftables
-	if v, ok := attrs["component"]; ok {
+	if v, ok := attrs[keyComponent]; ok {
 		return strings.ToLower(fmt.Sprint(v)) == "nflog"
 	}
 
@@ -673,9 +684,9 @@ func handleBlockedAlert(ctx context.Context, notifier *alerting.Notifier, attrs 
 		SourceIP:        extractStringAttr(attrs, "source_ip"),
 		SourcePort:      extractStringAttr(attrs, "source_port"),
 		DestinationIP:   extractStringAttr(attrs, "destination_ip"),
-		DestinationPort: extractStringAttr(attrs, "destination_port"),
+		DestinationPort: extractStringAttr(attrs, keyDestinationPort),
 		Destination:     buildDestinationString(attrs),
-		Component:       extractStringAttr(attrs, "component"),
+		Component:       extractStringAttr(attrs, keyComponent),
 	}
 
 	// Extract reason
@@ -717,7 +728,7 @@ func buildDestinationString(attrs map[string]any) string {
 		return host
 	}
 
-	if host := extractStringAttr(attrs, "host"); host != "" {
+	if host := extractStringAttr(attrs, keyHost); host != "" {
 		return host
 	}
 
@@ -732,7 +743,7 @@ func buildDestinationString(attrs map[string]any) string {
 
 	destIP := extractStringAttr(attrs, "destination_ip")
 
-	destPort := extractStringAttr(attrs, "destination_port")
+	destPort := extractStringAttr(attrs, keyDestinationPort)
 	if destIP != "" {
 		if destPort != "" {
 			return net.JoinHostPort(destIP, destPort)
@@ -745,7 +756,7 @@ func buildDestinationString(attrs map[string]any) string {
 }
 
 func getCanonicalTime(attrs map[string]any, fallback time.Time) string {
-	if t, ok := attrs["time"]; ok && fmt.Sprint(t) != "" {
+	if t, ok := attrs[keyTime]; ok && fmt.Sprint(t) != "" {
 		return fmt.Sprint(t)
 	}
 
@@ -763,11 +774,11 @@ func normalizeAttributeKeys(attrs map[string]any) {
 	}
 
 	if v, ok := attrs["dst_port"]; ok {
-		attrs["destination_port"] = v
+		attrs[keyDestinationPort] = v
 	}
 	// HTTP host: allow either key; prefer explicit http_host, else host.
 	if _, ok := attrs["http_host"]; !ok {
-		if v, ok := attrs["host"]; ok && fmt.Sprint(v) != "" {
+		if v, ok := attrs[keyHost]; ok && fmt.Sprint(v) != "" {
 			attrs["http_host"] = v
 		}
 	}
@@ -782,8 +793,8 @@ func buildDashboardPayload(
 	payload := map[string]any{
 		"producer_time": rTime.Format(time.RFC3339Nano),
 		"msg":           rMsg,
-		"action":        act,
-		"time":          getCanonicalTime(attrs, rTime),
+		keyAction:       act,
+		keyTime:         getCanonicalTime(attrs, rTime),
 	}
 
 	// Clone attrs to avoid mutating the caller's map
@@ -793,8 +804,8 @@ func buildDashboardPayload(
 
 	// Ensure hostname included if available
 	if hostname != "" {
-		if _, ok := norm["hostname"]; !ok || fmt.Sprint(norm["hostname"]) == "" {
-			payload["hostname"] = hostname
+		if _, ok := norm[keyHostname]; !ok || fmt.Sprint(norm[keyHostname]) == "" {
+			payload[keyHostname] = hostname
 		}
 	}
 

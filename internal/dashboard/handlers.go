@@ -17,6 +17,10 @@ import (
 const (
 	unblockTypeDomain = "domain"
 	unblockTypeIP     = "ip"
+
+	keyStatus  = "status"
+	keyPending = "pending"
+	keyHTTPS   = "https"
 )
 
 /* =========================
@@ -43,7 +47,7 @@ func (s *Server) healthHandler(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
 
 	err := json.NewEncoder(w).Encode(map[string]string{
-		"status":  "ok",
+		keyStatus: "ok",
 		"service": "g0efilter-dashboard",
 	})
 	if err != nil {
@@ -303,7 +307,7 @@ func (s *Server) clearLogsHandler(w http.ResponseWriter, r *http.Request) {
 	s.broadcaster.Send([]byte(`{"type":"cleared"}`))
 	w.Header().Set("Content-Type", "application/json")
 
-	err = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	err = json.NewEncoder(w).Encode(map[string]string{keyStatus: "ok"})
 	if err != nil {
 		s.logger.Error("failed to encode clear response", "error", err)
 	}
@@ -318,7 +322,7 @@ func (s *Server) unblockStatusHandler(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	err := json.NewEncoder(w).Encode(map[string]any{
-		"pending":   pending,
+		keyPending:  pending,
 		"completed": completed,
 	})
 	if err != nil {
@@ -348,7 +352,7 @@ func (s *Server) listUnblocksHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	err := json.NewEncoder(w).Encode(map[string]any{
-		"pending":   pending,
+		keyPending:  pending,
 		"completed": completed,
 	})
 	if err != nil {
@@ -421,7 +425,7 @@ func (s *Server) createUnblockHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 
-	err = json.NewEncoder(w).Encode(map[string]string{"id": id, "status": "pending"})
+	err = json.NewEncoder(w).Encode(map[string]string{"id": id, keyStatus: keyPending})
 	if err != nil {
 		s.logger.Error("failed to encode unblock response", "error", err)
 	}
@@ -477,7 +481,7 @@ func (s *Server) ackUnblockHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 
-	err = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	err = json.NewEncoder(w).Encode(map[string]string{keyStatus: "ok"})
 	if err != nil {
 		s.logger.Error("failed to encode ack response", "error", err)
 	}
