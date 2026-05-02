@@ -24,7 +24,6 @@ func Serve53(ctx context.Context, allowlist []string, opts Options) error {
 	return runDNSServers(ctx, udpSrv, tcpSrv, handler.upstreams, opts)
 }
 
-// createDNSHandler creates a DNS handler with the given allowlist and options.
 func createDNSHandler(allowlist []string, opts Options) *dnsHandler {
 	upstreams := defaultUpstreamsFromEnv()
 
@@ -36,7 +35,6 @@ func createDNSHandler(allowlist []string, opts Options) *dnsHandler {
 	}
 }
 
-// setupDNSServers creates UDP and TCP DNS servers using the provided listen address and handler.
 func setupDNSServers(listenAddr string, handler *dnsHandler) (*dns.Server, *dns.Server) {
 	mux := dns.NewServeMux()
 	mux.HandleFunc(".", handler.handle)
@@ -47,7 +45,6 @@ func setupDNSServers(listenAddr string, handler *dnsHandler) (*dns.Server, *dns.
 	return udpSrv, tcpSrv
 }
 
-// runDNSServers starts both UDP and TCP DNS servers and manages their lifecycle until context is done.
 func runDNSServers(
 	ctx context.Context,
 	udpSrv, tcpSrv *dns.Server,
@@ -64,18 +61,15 @@ func runDNSServers(
 
 	errCh := make(chan error, 2)
 
-	// Start servers
 	startUDPServer(udpSrv, errCh, opts)
 	startTCPServer(tcpSrv, errCh, opts)
 
-	// Graceful shutdown
 	go func() {
 		<-ctx.Done()
 		_ = udpSrv.ShutdownContext(ctx)
 		_ = tcpSrv.ShutdownContext(ctx)
 	}()
 
-	// Wait for completion
 	select {
 	case <-ctx.Done():
 		return nil
@@ -84,7 +78,6 @@ func runDNSServers(
 	}
 }
 
-// startUDPServer starts the UDP DNS server in a goroutine and reports errors to the channel.
 func startUDPServer(udpSrv *dns.Server, errCh chan error, opts Options) {
 	go func() {
 		err := udpSrv.ListenAndServe()
@@ -98,7 +91,6 @@ func startUDPServer(udpSrv *dns.Server, errCh chan error, opts Options) {
 	}()
 }
 
-// startTCPServer starts the TCP DNS server in a goroutine and reports errors to the channel.
 func startTCPServer(tcpSrv *dns.Server, errCh chan error, opts Options) {
 	go func() {
 		err := tcpSrv.ListenAndServe()

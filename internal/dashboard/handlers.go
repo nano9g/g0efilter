@@ -23,12 +23,7 @@ const (
 	keyHTTPS   = "https"
 )
 
-/* =========================
-   Handlers
-   ========================= */
-
-// configHandler returns server configuration to the UI so client-side limits
-// stay in sync with the server's actual buffer size without hardcoding.
+// configHandler returns buffer and read-limit configuration for UI synchronisation.
 func (s *Server) configHandler(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
@@ -41,7 +36,6 @@ func (s *Server) configHandler(w http.ResponseWriter, _ *http.Request) {
 	}
 }
 
-// healthHandler handles health check requests.
 func (s *Server) healthHandler(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -65,7 +59,6 @@ func (s *Server) ingestHandler(w http.ResponseWriter, r *http.Request) {
 
 	defer func() { _ = r.Body.Close() }()
 
-	// Read body once into memory
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		s.logger.Debug("ingest.read_failed",
@@ -84,10 +77,8 @@ func (s *Server) ingestHandler(w http.ResponseWriter, r *http.Request) {
 
 	var payloads []map[string]any
 
-	// Try array first
 	err = json.Unmarshal(body, &payloads)
 	if err != nil {
-		// Try single object
 		var obj map[string]any
 
 		err2 := json.Unmarshal(body, &obj)
@@ -148,9 +139,9 @@ func (s *Server) listLogsHandler(w http.ResponseWriter, r *http.Request) {
 
 	var sinceID int64
 
-	v := strings.TrimSpace(r.URL.Query().Get("since_id"))
-	if v != "" {
-		id, err := strconv.ParseInt(v, 10, 64)
+	raw := strings.TrimSpace(r.URL.Query().Get("since_id"))
+	if raw != "" {
+		id, err := strconv.ParseInt(raw, 10, 64)
 		if err == nil && id > 0 {
 			sinceID = id
 		}
@@ -158,9 +149,9 @@ func (s *Server) listLogsHandler(w http.ResponseWriter, r *http.Request) {
 
 	limit := s.readLimit
 
-	v2 := strings.TrimSpace(r.URL.Query().Get("limit"))
-	if v2 != "" {
-		n, err := strconv.Atoi(v2)
+	raw = strings.TrimSpace(r.URL.Query().Get("limit"))
+	if raw != "" {
+		n, err := strconv.Atoi(raw)
 		if err == nil && n > 0 && n <= 5000 {
 			limit = n
 		}
@@ -201,7 +192,6 @@ func (s *Server) listLogsHandler(w http.ResponseWriter, r *http.Request) {
 //
 //nolint:funlen // SSE handler requires complete event loop implementation
 func (s *Server) sseHandler(w http.ResponseWriter, r *http.Request) {
-	// SSE headers
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache, no-transform")
 	w.Header().Set("Connection", "keep-alive")
@@ -225,7 +215,6 @@ func (s *Server) sseHandler(w http.ResponseWriter, r *http.Request) {
 		"remote", r.RemoteAddr,
 	)
 
-	// Client retry hint
 	_, _ = fmt.Fprintf(w, "retry: %d\n\n", int(s.sseRetry.Milliseconds()))
 	_, _ = w.Write([]byte(": connected\n\n"))
 
@@ -283,7 +272,6 @@ func (s *Server) sseHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// clearLogsHandler handles DELETE /api/v1/logs requests to empty the log buffer.
 func (s *Server) clearLogsHandler(w http.ResponseWriter, r *http.Request) {
 	s.logger.Debug("logs.clearing",
 		"remote", r.RemoteAddr,
@@ -487,8 +475,7 @@ func (s *Server) ackUnblockHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// SanitizeSearchQuery validates and sanitizes the search query parameter.
-// Returns sanitized query or empty string if validation fails.
+// SanitizeSearchQuery returns the sanitized query, or empty string if validation fails.
 func SanitizeSearchQuery(q string) string {
 	if q == "" {
 		return q
@@ -496,6 +483,7 @@ func SanitizeSearchQuery(q string) string {
 
 	// Limit query length
 	const maxQueryLength = 200
+
 	if len(q) > maxQueryLength {
 		return ""
 	}
@@ -511,11 +499,9 @@ func SanitizeSearchQuery(q string) string {
 	return q
 }
 
-// isValidSearchChars checks if query contains only valid characters.
 func isValidSearchChars(q string) bool {
 	for _, r := range q {
-		// Reject control characters (<32) and DEL (127).
-		// This covers \n, \r, \x00 and all other control characters.
+		// reject control characters (< 0x20) and DEL (0x7f)
 		if r < 32 || r == 127 {
 			return false
 		}
@@ -524,8 +510,6 @@ func isValidSearchChars(q string) bool {
 	return true
 }
 
-// hasInjectionPatterns checks for common injection attack patterns.
-// Note: control characters (\r, \n, etc.) are already rejected by isValidSearchChars.
 func hasInjectionPatterns(q string) bool {
 	return strings.Contains(q, "<script") ||
 		strings.Contains(q, "javascript:")

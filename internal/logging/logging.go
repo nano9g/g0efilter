@@ -30,7 +30,6 @@ import (
 //nolint:gochecknoglobals // Mutex needed for thread safety
 var globalLoggerMutex sync.Mutex
 
-// setGlobalLogger sets the global zerolog.Logger.
 func setGlobalLogger(zl zerolog.Logger) {
 	globalLoggerMutex.Lock()
 	defer globalLoggerMutex.Unlock()
@@ -51,7 +50,7 @@ const (
 	keyTime            = "time"
 
 	defaultQueueSize         = 1024
-	defaultWorkers           = 3               // number of concurrent workers
+	defaultWorkers           = 3
 	defaultRetryTimeout      = 5 * time.Second // max time to retry a single POST
 	defaultIdleConnTimeout   = 90 * time.Second
 	defaultHTTPClientTimeout = 15 * time.Second
@@ -70,7 +69,6 @@ var (
 	defaultPoster *poster //nolint:gochecknoglobals
 )
 
-// parseLevel converts a log level string to slog.Leveler, defaulting to INFO.
 func parseLevel(s string) slog.Leveler {
 	switch strings.ToUpper(strings.TrimSpace(s)) {
 	case "TRACE":
@@ -85,8 +83,6 @@ func parseLevel(s string) slog.Leveler {
 		return slog.LevelInfo
 	}
 }
-
-// ---------- poster ----------
 
 type poster struct {
 	url          string
@@ -110,10 +106,8 @@ type poster struct {
 	retryWaitMax time.Duration
 }
 
-// shouldRetry determines if an HTTP request should be retried based on the response code or error.
 func shouldRetry(resp *http.Response, err error) bool {
 	if err != nil {
-		// Retry on network errors
 		return true
 	}
 
@@ -162,7 +156,6 @@ func newPosterWithCtx(ctx context.Context, url, apiKey string, zl zerolog.Logger
 
 	poster.httpC = &http.Client{Timeout: defaultHTTPClientTimeout, Transport: tr}
 
-	// Configure retry settings
 	poster.retryMax = 4
 	poster.retryWaitMin = defaultRetryWait
 	poster.retryWaitMax = defaultRetryWaitMax
@@ -243,7 +236,7 @@ func (p *poster) Probe(ctx context.Context) error {
 	req.Header.Set("Content-Type", "application/json")
 	setAPIAuthHeaders(req.Header, p.apiKey)
 
-	resp, err := p.httpC.Do(req) //nolint:gosec // URL is from internal dashboard config, not user input
+	resp, err := p.httpC.Do(req) //nolint:gosec // G107: URL from config
 	if err != nil {
 		return fmt.Errorf("failed to execute probe request: %w", err)
 	}
@@ -256,7 +249,7 @@ func (p *poster) Probe(ctx context.Context) error {
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("%w %d", errProbeStatus, resp.StatusCode)
+		return fmt.Errorf("%w: %d", errProbeStatus, resp.StatusCode)
 	}
 
 	return nil
@@ -282,17 +275,14 @@ func (p *poster) handlePostPayload(ctx context.Context, payload []byte) {
 		logTraceBody(p.zl, p.url, payload)
 	}
 
-	// Create context with timeout for retry loop
 	retryCtx, cancel := context.WithTimeout(ctx, p.retryTimeout)
 	defer cancel()
 
-	// Retry loop with exponential backoff
 	backoffDuration := p.retryWaitMin
 
 	for {
 		select {
 		case <-retryCtx.Done():
-			// Timeout or cancellation - give up
 			p.zl.Warn().Str("url", p.url).Msg("dashboard: giving up after timeout")
 
 			return
@@ -302,15 +292,12 @@ func (p *poster) handlePostPayload(ctx context.Context, payload []byte) {
 				return
 			}
 
-			// Log that we're going to retry
 			if p.debug {
 				p.zl.Debug().Str("url", p.url).Msg("dashboard: posting failed, will retry")
 			}
 
-			// Wait with exponential backoff
 			time.Sleep(addJitter(backoffDuration))
 
-			// Increase backoff up to max
 			if backoffDuration < p.retryWaitMax {
 				backoffDuration *= 2
 				if backoffDuration > p.retryWaitMax {
@@ -334,7 +321,6 @@ func addJitter(d time.Duration) time.Duration {
 }
 
 func (p *poster) attemptPost(ctx context.Context, payload []byte) bool {
-	// Create new request for each attempt with context
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.url, bytes.NewReader(payload))
 	if err != nil {
 		p.zl.Error().Err(err).Msg("dashboard: build request error")
@@ -347,7 +333,6 @@ func (p *poster) attemptPost(ctx context.Context, payload []byte) bool {
 
 	resp, err := p.httpC.Do(req)
 
-	// Check if we should retry
 	if !shouldRetry(resp, err) {
 		return p.handleFinalResponse(resp, err)
 	}
@@ -470,19 +455,15 @@ func (p *poster) startWorker(ctx context.Context) {
 
 	close(p.ready) // signal that shipping is beginning
 
-	// Start worker pool
 	p.wg.Add(p.workers)
 
 	for range p.workers {
 		go p.worker(ctx)
 	}
 
-	// Wait for all workers to finish
 	p.wg.Wait()
 	close(p.done)
 }
-
-// ---------- zerolog bridge as a slog.Handler ----------
 
 // zerologHandler implements slog.Handler using zerolog.
 type zerologHandler struct {
@@ -532,20 +513,15 @@ var dashboardKeys = []string{ //nolint:gochecknoglobals
 }
 
 func (z *zerologHandler) Handle(ctx context.Context, record slog.Record) error {
-	// Collect attrs into a flat map, starting with base attrs from With() calls
 	attrs := make(map[string]any, len(z.baseAttrs)+record.NumAttrs())
-
-	// First, copy base attributes from With() calls
 	maps.Copy(attrs, z.baseAttrs)
 
-	// Then, add record-specific attributes (these override base attrs if same key)
 	record.Attrs(func(a slog.Attr) bool {
 		attrs[a.Key] = a.Value.Any()
 
 		return true
 	})
 
-	// Extract action once for all downstream consumers
 	act := extractAction(attrs)
 
 	// Adjust log level for IP-based ALLOWED events (allowlisted IPs)
@@ -554,17 +530,14 @@ func (z *zerologHandler) Handle(ctx context.Context, record slog.Record) error {
 		logLevel = slog.LevelDebug
 	}
 
-	// Terminal output: only if record level >= configured threshold
 	if logLevel >= z.termLevel {
 		logToTerminal(z.zl, logLevel, record.Message, attrs)
 	}
 
-	// Ship action events to the dashboard if configured
 	if z.poster != nil && act != "" {
 		shipToDashboard(z.poster, z.hostname, z.version, record.Time, record.Message, act, attrs)
 	}
 
-	// Alerting feature - send notifications for BLOCKED events
 	if z.notifier != nil && act == actions.ActionBlocked {
 		handleBlockedAlert(ctx, z.notifier, attrs)
 	}
@@ -609,13 +582,12 @@ func shouldShipToDashboard(act string, attrs map[string]any) bool {
 	}
 
 	// Skip ALLOWED actions from nftables (allowlisted IPs with component=nflog)
-	// Keep ALLOWED from HTTPS/HTTP/DNS filters (domain matches with wildcards)
 	if act == actions.ActionAllowed {
 		component := ""
 		if v, ok := attrs[keyComponent]; ok {
 			component = strings.ToLower(fmt.Sprint(v))
 		}
-		// Skip nflog (nftables IP-based allows)
+
 		if component == "nflog" {
 			return false
 		}
@@ -624,7 +596,6 @@ func shouldShipToDashboard(act string, attrs map[string]any) bool {
 	return true
 }
 
-// extractAction extracts the action string from attributes.
 func extractAction(attrs map[string]any) string {
 	if v, ok := attrs[keyAction]; ok {
 		return strings.ToUpper(fmt.Sprint(v))
@@ -633,7 +604,6 @@ func extractAction(attrs map[string]any) string {
 	return ""
 }
 
-// isAllowlistedIP checks if an event is an ALLOWED action for an allowlisted IP (from nftables).
 func isAllowlistedIP(act string, attrs map[string]any) bool {
 	if act != actions.ActionAllowed {
 		return false
@@ -797,21 +767,18 @@ func buildDashboardPayload(
 	maps.Copy(norm, attrs)
 	normalizeAttributeKeys(norm)
 
-	// Ensure hostname included if available
 	if hostname != "" {
 		if _, ok := norm[keyHostname]; !ok || fmt.Sprint(norm[keyHostname]) == "" {
 			payload[keyHostname] = hostname
 		}
 	}
 
-	// Include client version if available
 	if version != "" {
 		if _, ok := norm["version"]; !ok || fmt.Sprint(norm["version"]) == "" {
 			payload["version"] = version
 		}
 	}
 
-	// Copy canonical fields if present
 	for _, key := range dashboardKeys {
 		if val, ok := norm[key]; ok && val != nil && fmt.Sprint(val) != "" {
 			payload[key] = val
@@ -822,17 +789,14 @@ func buildDashboardPayload(
 }
 
 func (z *zerologHandler) WithAttrs(a []slog.Attr) slog.Handler {
-	// Extend logger context with attrs
 	logger := z.zl
 
-	// Create new base attrs map including existing and new attrs
 	newBaseAttrs := make(map[string]any, len(z.baseAttrs)+len(a))
 	maps.Copy(newBaseAttrs, z.baseAttrs)
 
 	for _, attr := range a {
 		val := attr.Value.Any()
 
-		// Store in baseAttrs for later use
 		newBaseAttrs[attr.Key] = val
 
 		// Also add to zerolog context for terminal output
@@ -867,11 +831,8 @@ func (z *zerologHandler) WithGroup(name string) slog.Handler {
 	return z
 }
 
-// ---------- constructors ----------
-
 // initializeDashboardPoster sets up the dashboard HTTP poster with configuration from environment.
 func initializeDashboardPoster(ctx context.Context, dhost string, zl zerolog.Logger, lvl slog.Level) *poster {
-	// Add http:// prefix if needed
 	if !strings.HasPrefix(dhost, "http://") && !strings.HasPrefix(dhost, "https://") {
 		dhost = "http://" + dhost
 	}
@@ -881,7 +842,6 @@ func initializeDashboardPoster(ctx context.Context, dhost string, zl zerolog.Log
 	debugEnabled := lvl <= slog.LevelDebug
 	traceEnabled := lvl <= LevelTrace
 
-	// Parse queue size from environment
 	queueSize := parseQueueSize(zl)
 
 	poster := newPosterWithCtx(ctx, durl, dapi, zl, debugEnabled, queueSize)

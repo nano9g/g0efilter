@@ -129,7 +129,6 @@ func HandleVersionFlag(args []string, version, date, commit string) bool {
 	return false
 }
 
-// config holds application configuration from environment variables.
 type config struct {
 	policyPath          string
 	httpPort            string
@@ -147,7 +146,6 @@ type config struct {
 	notificationKey     string
 }
 
-// loadConfig reads configuration from environment variables.
 func loadConfig() config {
 	return config{
 		policyPath:          getenvDefault("POLICY_PATH", "/app/policy.yaml"),

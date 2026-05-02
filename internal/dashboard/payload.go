@@ -20,10 +20,8 @@ func (s *Server) processPayloads(ctx context.Context, payloads []map[string]any,
 	isProbe := false
 
 	for _, in := range payloads {
-		// Sanitize domain/hostname fields before processing
 		SanitizePayloadFields(in)
 
-		// Check if this is a probe message
 		if msg, ok := in["msg"].(string); ok && (msg == "_dashboard_probe" || strings.HasPrefix(msg, "_dashboard_")) {
 			isProbe = true
 		}
@@ -114,7 +112,6 @@ func (s *Server) processPayload(ctx context.Context, in map[string]any, remoteIP
 		return nil
 	}
 
-	// Parse timestamp
 	ts := time.Now().UTC()
 
 	if tval, ok := in["time"].(string); ok && tval != "" {
@@ -124,7 +121,6 @@ func (s *Server) processPayload(ctx context.Context, in map[string]any, remoteIP
 		}
 	}
 
-	// Build fields JSON
 	fieldsMap := extractFieldsMap(in)
 
 	fieldsRaw, err := json.Marshal(fieldsMap)
@@ -185,7 +181,6 @@ func extractFieldsMap(in map[string]any) map[string]any {
 	return fieldsMap
 }
 
-// deriveProtocol determines the protocol from the payload.
 func deriveProtocol(in map[string]any) string {
 	protocol, _ := in["protocol"].(string)
 	if protocol != "" {
@@ -215,7 +210,6 @@ func getStringFromPayload(in map[string]any, keys ...string) string {
 	return ""
 }
 
-// getIntFromPayload gets float64 as int from payload.
 func getIntFromPayload(in map[string]any, key string) int {
 	if v, ok := in[key].(float64); ok {
 		return int(v)
@@ -241,7 +235,6 @@ func SanitizeDomainField(value string) string {
 		return invalidDomainPlaceholder
 	}
 
-	// Limit length to prevent memory issues
 	const maxFieldLength = 255
 	if len(value) > maxFieldLength {
 		return invalidDomainPlaceholder

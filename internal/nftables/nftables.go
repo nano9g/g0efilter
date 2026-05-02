@@ -53,7 +53,6 @@ func parsePort(s, name string) (int, error) {
 	return port, nil
 }
 
-// splitByFamily partitions a flat IP/CIDR allowlist into IPv4 and IPv6 slices.
 func splitByFamily(allowlist []string) ([]string, []string) {
 	var v4, v6 []string
 

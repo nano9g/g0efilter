@@ -69,7 +69,6 @@ func validationLogger(logger *slog.Logger, source string) func(suffix string, ar
 	}
 }
 
-// determineStructureFailureReason provides detailed reason for structure validation failure.
 func determineStructureFailureReason(host string) string {
 	if strings.HasPrefix(host, ".") {
 		return "starts_with_dot"
@@ -90,7 +89,6 @@ func determineStructureFailureReason(host string) string {
 	return "unknown"
 }
 
-// determineLabelFailureReason provides detailed reason for label validation failure.
 func determineLabelFailureReason(host string) string {
 	labels := strings.Split(host, ".")
 	if len(labels) < 2 {
@@ -106,7 +104,6 @@ func determineLabelFailureReason(host string) string {
 	return "unknown"
 }
 
-// checkLabelValidity checks if a label is valid and returns failure reason if invalid.
 func checkLabelValidity(label string, isTLD bool) string {
 	if !isValidLabel(label) {
 		switch {
@@ -135,12 +132,10 @@ func checkLabelValidity(label string, isTLD bool) string {
 	return ""
 }
 
-// hasValidLength checks if host length is within acceptable bounds.
 func hasValidLength(host string) bool {
 	return len(host) >= minValidHostLength && len(host) <= maxHostLength
 }
 
-// hasValidCharacters checks if all characters are valid DNS characters.
 func hasValidCharacters(host string) bool {
 	for _, r := range host {
 		if !isValidDNSChar(r) {

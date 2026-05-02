@@ -9,10 +9,6 @@ import (
 	"github.com/g0lab/g0efilter/internal/logging"
 )
 
-/* =========================
-   In-memory queue store
-   ========================= */
-
 type memStore struct {
 	mu     sync.RWMutex
 	buf    []LogEntry
@@ -35,7 +31,6 @@ func newMemStore(n int) *memStore {
 	}
 }
 
-// Insert adds a log entry to the circular buffer and returns its ID.
 func (s *memStore) Insert(ctx context.Context, e *LogEntry) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -60,7 +55,6 @@ func (s *memStore) Insert(ctx context.Context, e *LogEntry) (int64, error) {
 	return id, nil
 }
 
-// Clear removes all log entries from the store.
 func (s *memStore) Clear(_ context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -109,9 +103,7 @@ func (s *memStore) Query(_ context.Context, q string, sinceID int64, limit int) 
 	return out, nil
 }
 
-// shouldSkipEntry returns true if the entry should be filtered out based on ID or query string.
 func (s *memStore) shouldSkipEntry(entry LogEntry, q string, sinceID int64) bool {
-	// ID filter
 	if sinceID > 0 && entry.ID <= sinceID {
 		return true
 	}
@@ -130,7 +122,6 @@ func (s *memStore) shouldSkipEntry(entry LogEntry, q string, sinceID int64) bool
 	return false
 }
 
-// prevIndex returns the previous index in the circular buffer, wrapping around if necessary.
 func (s *memStore) prevIndex(idx int) int {
 	if idx == 0 {
 		return s.size - 1

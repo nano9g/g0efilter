@@ -13,7 +13,6 @@ type broadcaster struct {
 	clients map[chan []byte]struct{}
 }
 
-// newBroadcaster creates a new SSE broadcaster for distributing log events to connected clients.
 func newBroadcaster() *broadcaster {
 	return &broadcaster{clients: make(map[chan []byte]struct{})}
 }
@@ -34,7 +33,6 @@ func (b *broadcaster) Add() chan []byte {
 	return ch
 }
 
-// Remove unregisters an SSE client and closes its channel.
 func (b *broadcaster) Remove(ch chan []byte) {
 	b.mu.Lock()
 	delete(b.clients, ch)
@@ -67,7 +65,6 @@ func (b *broadcaster) Send(p []byte) {
 		select {
 		case ch <- p:
 		default:
-			// drop if slow consumer
 			dropped++
 		}
 	}
