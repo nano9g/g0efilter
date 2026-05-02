@@ -41,6 +41,8 @@ checksum:
 dockers_v2:
   - id: g0efilter
     dockerfile: ./Dockerfile
+    ids:
+      - g0efilter
     images:
       - docker.io/g0lab/g0efilter
     tags:
@@ -51,7 +53,6 @@ dockers_v2:
       - linux/arm64
     sbom: "true"
     flags:
-      - "--sbom=true"
       - "--provenance=mode=max"
     labels:
       org.opencontainers.image.source: "https://github.com/g0lab/g0efilter"
@@ -62,6 +63,8 @@ dockers_v2:
 
   - id: g0efilter-dashboard
     dockerfile: ./Dockerfile.dashboard
+    ids:
+      - g0efilter-dashboard
     images:
       - docker.io/g0lab/g0efilter-dashboard
     tags:
@@ -72,7 +75,6 @@ dockers_v2:
       - linux/arm64
     sbom: "true"
     flags:
-      - "--sbom=true"
       - "--provenance=mode=max"
     labels:
       org.opencontainers.image.source: "https://github.com/g0lab/g0efilter"
