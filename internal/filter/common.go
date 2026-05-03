@@ -500,7 +500,6 @@ func logBlockedConnection(
 	}
 
 	sourceIP, sourcePort := sourceAddr(conn)
-	flowID := actions.FlowID(sourceIP, sourcePort, destIP, destPort, "tcp")
 
 	var identifierKey string
 
@@ -520,14 +519,15 @@ func logBlockedConnection(
 		"reason", reason,
 		"source_ip", sourceIP,
 		"source_port", sourcePort,
-		"flow_id", flowID,
 	}
 
 	if destIP != "" {
+		flowID := actions.FlowID(sourceIP, sourcePort, destIP, destPort, "tcp")
 		fields = append(fields,
 			"destination_ip", destIP,
 			"destination_port", destPort,
 			"dst", net.JoinHostPort(destIP, strconv.Itoa(destPort)),
+			"flow_id", flowID,
 		)
 	}
 
