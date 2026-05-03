@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -507,6 +508,28 @@ func TestLogBlockedConnection(t *testing.T) {
 
 		// Should not panic
 		logBlockedConnection(opts, "https", "not-allowlisted", "evil.com", conn1, "1.2.3.4", 443)
+	})
+
+	t.Run("no dest info - no host or parse failure", func(t *testing.T) {
+		t.Parallel()
+
+		var buf bytes.Buffer
+
+		logger := slog.New(slog.NewJSONHandler(&buf, nil))
+		opts := Options{Logger: logger}
+
+		conn1, conn2 := net.Pipe()
+
+		defer func() { _ = conn1.Close() }()
+		defer func() { _ = conn2.Close() }()
+
+		// destIP="" destPort=0 simulates originalDstTCP failure (no-host / parse-failed case)
+		logBlockedConnection(opts, "https", "no-sni", "", conn1, "", 0)
+
+		logged := buf.String()
+		if strings.Contains(logged, "flow_id") {
+			t.Errorf("expected no flow_id when destination is unknown, got: %s", logged)
+		}
 	})
 }
 
