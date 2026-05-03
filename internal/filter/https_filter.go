@@ -35,10 +35,7 @@ func handle(conn net.Conn, allowlist []string, opts Options) error {
 	}
 
 	// 1) Extract SNI from ClientHello
-	sni, buf, err := extractSNIFromConnection(conn, opts)
-	if err != nil {
-		return err
-	}
+	sni, buf := extractSNIFromConnection(conn, opts)
 
 	// 2) Check if SNI is blocked
 	allowed := allowedHost(sni, allowlist)
@@ -57,22 +54,21 @@ func handle(conn net.Conn, allowlist []string, opts Options) error {
 }
 
 // extractSNIFromConnection extracts SNI from TLS ClientHello.
-func extractSNIFromConnection(conn net.Conn, opts Options) (string, *bytes.Buffer, error) {
+func extractSNIFromConnection(conn net.Conn, opts Options) (string, *bytes.Buffer) {
 	_ = conn.SetReadDeadline(time.Now().Add(connectionReadTimeout))
 
 	ch, buf, err := peekClientHello(conn)
 	if err != nil {
 		if opts.Logger != nil {
-			opts.Logger.Info("https.blocked",
-				"component", "https",
-				"action", "BLOCKED",
-				"reason", "peek-failed",
+			opts.Logger.Debug("https.peek_failed",
 				"err", err.Error(),
 				"src", conn.RemoteAddr().String(),
 			)
 		}
 
-		return "", nil, err
+		// Return empty SNI so handle() falls through to
+		// handleBlockedHTTPS, which recovers originalDst and logs destination_ip.
+		return "", nil
 	}
 
 	_ = conn.SetReadDeadline(time.Time{})
@@ -112,7 +108,7 @@ func extractSNIFromConnection(conn net.Conn, opts Options) (string, *bytes.Buffe
 		)
 	}
 
-	return sni, buf, nil
+	return sni, buf
 }
 
 // handleBlockedHTTPS handles blocked HTTPS connections.
