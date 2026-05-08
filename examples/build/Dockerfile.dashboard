@@ -1,5 +1,5 @@
 # Stage 1: Build
-FROM golang:1.26.2-alpine3.23 AS builder
+FROM golang:1.26.3-alpine3.23 AS builder
 
 ARG VERSION=dev
 ARG COMMIT=unknown
