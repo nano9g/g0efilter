@@ -1,6 +1,6 @@
 module github.com/g0lab/g0efilter
 
-go 1.26.2
+go 1.26.3
 
 require (
 	github.com/florianl/go-nflog/v2 v2.3.0
@@ -20,8 +20,8 @@ require (
 	github.com/mattn/go-isatty v0.0.22 // indirect
 	github.com/mdlayher/netlink v1.11.1 // indirect
 	github.com/mdlayher/socket v0.6.0 // indirect
-	golang.org/x/mod v0.35.0 // indirect
+	golang.org/x/mod v0.36.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
-	golang.org/x/tools v0.44.0 // indirect
+	golang.org/x/tools v0.45.0 // indirect
 )
