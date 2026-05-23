@@ -176,7 +176,10 @@ func (s *Server) routes() http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
+
+	// Trust X-Forwarded-For from the configured reverse proxy.
+	// Deploy the dashboard behind Traefik/nginx/HAProxy/etc and do not expose it directly.
+	r.Use(middleware.ClientIPFromXFF())
 	r.Use(s.securityHeadersMiddleware())
 	r.Use(s.loggerMiddleware())
 	r.Use(middleware.Recoverer)
@@ -217,6 +220,21 @@ func (s *Server) routes() http.Handler {
 	return r
 }
 
+// clientIP returns the validated client IP set by chi's ClientIP middleware.
+// If not set, it falls back to extracting the host from r.RemoteAddr.
+func clientIP(r *http.Request) string {
+	if ip := middleware.GetClientIP(r.Context()); ip != "" {
+		return ip
+	}
+
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err == nil {
+		return host
+	}
+
+	return r.RemoteAddr
+}
+
 // securityHeadersMiddleware sets standard HTTP security headers on every response.
 // CSP requires 'unsafe-inline' for both script-src and style-src because:
 //   - index.html uses inline style= on <col> elements (column widths) and aggView display:none
@@ -255,7 +273,7 @@ func (s *Server) loggerMiddleware() func(http.Handler) http.Handler {
 					s.logger.Debug("http.req",
 						"method", r.Method,
 						"path", r.URL.Path,
-						"remote", r.RemoteAddr,
+						"remote", clientIP(r),
 						"code", ww.Status(),
 						"bytes", ww.BytesWritten(),
 						"duration", time.Since(start).String(),
@@ -275,7 +293,7 @@ func (s *Server) requireAPIKey() func(http.Handler) http.Handler {
 			got := r.Header.Get("X-Api-Key")
 			if subtle.ConstantTimeCompare([]byte(got), []byte(s.apiKey)) != 1 {
 				s.logger.Debug("auth.failed",
-					"remote", r.RemoteAddr,
+					"remote", clientIP(r),
 					"path", r.URL.Path,
 					"reason", "invalid_api_key",
 				)
@@ -286,7 +304,7 @@ func (s *Server) requireAPIKey() func(http.Handler) http.Handler {
 			}
 
 			s.logger.Log(r.Context(), logging.LevelTrace, "auth.success",
-				"remote", r.RemoteAddr,
+				"remote", clientIP(r),
 				"path", r.URL.Path,
 			)
 
@@ -299,9 +317,10 @@ func (s *Server) requireAPIKey() func(http.Handler) http.Handler {
 func (s *Server) rateLimitMiddleware(rl RateLimiter) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if !rl.Allow(r.RemoteAddr) {
+			remote := clientIP(r)
+			if !rl.Allow(remote) {
 				s.logger.Debug("rate_limit.denied",
-					"remote", r.RemoteAddr,
+					"remote", remote,
 					"path", r.URL.Path,
 				)
 				http.Error(w, `{"error":"rate limited"}`, http.StatusTooManyRequests)
