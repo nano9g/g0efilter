@@ -7,14 +7,23 @@ updates:
     labels: ["dependencies", "github-actions"]
     commit-message:
       prefix: "chore"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
 
   - package-ecosystem: "gomod"
     directory: "/"
     groups:
-      minor-patch:
+      gomod:
+        patterns:
+          - "*"
         update-types:
-          - "patch"
           - "minor"
+          - "patch"
     schedule:
       interval: "cron"
       cronjob: "0 9 * * *"
@@ -32,3 +41,10 @@ updates:
     labels: ["dependencies", "docker"]
     commit-message:
       prefix: "chore"
+    groups:
+      docker:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
