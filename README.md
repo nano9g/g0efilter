@@ -1,9 +1,8 @@
 [![docker pulls](https://img.shields.io/docker/pulls/g0lab/g0efilter.svg?label=docker%20pulls)](https://hub.docker.com/r/g0lab/g0efilter)
 [![g0efilter CI](https://github.com/g0lab/g0efilter/actions/workflows/ci.yaml/badge.svg)](https://github.com/g0lab/g0efilter/actions/workflows/ci.yaml)
-[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fg0lab%2Fg0efilter.svg?type=shield&issueType=security)](https://app.fossa.com/projects/git%2Bgithub.com%2Fg0lab%2Fg0efilter?ref=badge_shield&issueType=security)
+[![g0efilter Tests](https://github.com/g0lab/g0efilter/actions/workflows/test.yaml/badge.svg)](https://github.com/g0lab/g0efilter/actions/workflows/test.yaml)
 [![Go Report Card](https://goreportcard.com/badge/g0lab/g0efilter)](https://goreportcard.com/report/g0lab/g0efilter)
 [![codecov](https://codecov.io/gh/g0lab/g0efilter/graph/badge.svg?token=owO27TfE79)](https://codecov.io/gh/g0lab/g0efilter)
-[![License](https://img.shields.io/github/license/g0lab/g0efilter.svg)](https://github.com/g0lab/g0efilter/blob/main/LICENSE)
 
 > [!NOTE]
 > Portions of this project were developed with the assistance of AI tools.
