@@ -196,6 +196,8 @@ func TestNotifierWithIgnoreList(t *testing.T) {
 		notifier := NewNotifier()
 		if notifier == nil {
 			t.Fatal("Expected notifier to be created")
+
+			return
 		}
 
 		defer notifier.Close()

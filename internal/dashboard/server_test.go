@@ -384,6 +384,8 @@ func TestProcessPayload(t *testing.T) {
 		entry := srv.processPayload(context.Background(), payload, "10.0.0.1")
 		if entry == nil {
 			t.Fatal("processPayload returned nil for valid payload")
+
+			return
 		}
 
 		if entry.Message != "connection blocked" {
@@ -470,6 +472,8 @@ func TestProcessPayload(t *testing.T) {
 		entry := srv.processPayload(context.Background(), payload, "10.0.0.1")
 		if entry == nil {
 			t.Fatal("processPayload returned nil for ALLOWED action")
+
+			return
 		}
 
 		if entry.Action != testActionAllowed {
