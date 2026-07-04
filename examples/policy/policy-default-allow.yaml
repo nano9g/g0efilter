@@ -1,0 +1,23 @@
+---
+# Default-allow (denylist) policy: traffic passes unless it matches the denylist.
+# Useful for containers that need broad internet access but should be kept away
+# from analytics/telemetry endpoints and the LAN.
+#
+# To use: copy this over policy.yaml (the filename mounted into the container),
+# or point POLICY_PATH at it.
+default_action: allow
+
+# An explicit allowlist match always overrides the denylist - use it to punch
+# holes in broad wildcard denies.
+allowlist:
+  domains:
+    - "api.github.com"
+
+denylist:
+  ips:
+    - "192.168.0.0/16"
+  domains:
+    - "*.doubleclick.net"                    # analytics
+    - "*.google-analytics.com"
+    - "telemetry.example.com"                # self-update / phone-home checks
+    - '/^update[0-9]*\.example\.com$/'       # regex works in denylists too
