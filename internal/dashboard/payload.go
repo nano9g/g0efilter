@@ -97,11 +97,11 @@ func (s *Server) processPayload(ctx context.Context, in map[string]any, remoteIP
 		return nil
 	}
 
-	// Action filter: only keep ALLOWED/BLOCKED
+	// Action filter: only keep ALLOWED/BLOCKED/AUDIT
 	action, _ := in["action"].(string)
 
 	act := strings.ToUpper(strings.TrimSpace(action))
-	if act != actions.ActionAllowed && act != actions.ActionBlocked {
+	if act != actions.ActionAllowed && act != actions.ActionBlocked && act != actions.ActionAudit {
 		s.logger.Debug("payload.rejected",
 			"remote", remoteIP,
 			"action", action,
@@ -172,7 +172,8 @@ func extractFieldsMap(in map[string]any) map[string]any {
 	// Merge top-level fields
 	for _, k := range []string{"action", "component", "protocol", "policy_hit", "payload_len",
 		"reason", "tenant_id", "flow_id", "hostname", "source_ip", "source_port",
-		"destination_ip", "destination_port", "src", "dst", "http_host", "host", keyHTTPS, "qname", "qtype", "version"} {
+		"destination_ip", "destination_port", "src", "dst", "http_host", "host", keyHTTPS, "qname", "qtype", "version",
+		"pid", "process_name", "cmdline", "executable"} {
 		if v, ok := in[k]; ok && v != nil {
 			fieldsMap[k] = v
 		}

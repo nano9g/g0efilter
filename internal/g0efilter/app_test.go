@@ -15,6 +15,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/g0lab/g0efilter/internal/policy"
 )
 
 func discardLogger() *slog.Logger {
@@ -90,6 +92,9 @@ func TestLoadConfigDefaults(t *testing.T) {
 		logFile:             "",
 		hostname:            "",
 		mode:                "https",
+		defaultAction:       "deny",
+		learningMode:        false,
+		learner:             nil,
 		enableRemoteUnblock: false,
 		dashboardHost:       "",
 		dashboardAPIKey:     "",
@@ -113,6 +118,8 @@ func TestLoadConfigCustomValues(t *testing.T) {
 	t.Setenv("LOG_FILE", "/var/log/g0efilter.log")
 	t.Setenv("HOSTNAME", "test-host")
 	t.Setenv("FILTER_MODE", "DNS")
+	t.Setenv("DEFAULT_ACTION", "ALLOW")
+	t.Setenv("LEARNING_MODE", "true")
 	t.Setenv("ENABLE_REMOTE_UNBLOCK", "true")
 	t.Setenv("DASHBOARD_HOST", "dash.example.com")
 	t.Setenv("DASHBOARD_API_KEY", "secret123")
@@ -129,6 +136,9 @@ func TestLoadConfigCustomValues(t *testing.T) {
 		logFile:             "/var/log/g0efilter.log",
 		hostname:            "test-host",
 		mode:                "dns",
+		defaultAction:       "allow",
+		learningMode:        true,
+		learner:             nil,
 		enableRemoteUnblock: true,
 		dashboardHost:       "dash.example.com",
 		dashboardAPIKey:     "secret123",
@@ -296,8 +306,10 @@ func TestSendLatestKeepsMostRecent(t *testing.T) {
 	ctx := context.Background()
 	ch := make(chan policyUpdate, 1)
 
-	upd1 := policyUpdate{hash: "h1", domains: []string{"a"}, ips: []string{"1.1.1.1"}}
-	upd2 := policyUpdate{hash: "h2", domains: []string{"b"}, ips: []string{"2.2.2.2"}}
+	//nolint:exhaustruct
+	upd1 := policyUpdate{hash: "h1", pol: &policy.Policy{AllowDomains: []string{"a"}, AllowIPs: []string{"1.1.1.1"}}}
+	//nolint:exhaustruct
+	upd2 := policyUpdate{hash: "h2", pol: &policy.Policy{AllowDomains: []string{"b"}, AllowIPs: []string{"2.2.2.2"}}}
 
 	sendLatest(ctx, ch, upd1)
 	sendLatest(ctx, ch, upd2)
@@ -383,7 +395,7 @@ func TestIsInodeUnlinkedUnlinkedFile(t *testing.T) {
 
 	p := f.Name()
 
-	// Remove the directory entry — lstat will fail (ENOENT), not return nlink=0
+	// Remove the directory entry - lstat will fail (ENOENT), not return nlink=0
 	err = os.Remove(p)
 	if err != nil {
 		t.Fatalf("remove temp file: %v", err)

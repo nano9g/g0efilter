@@ -25,6 +25,7 @@ import (
 	"github.com/g0lab/g0efilter/internal/logging"
 	"github.com/g0lab/g0efilter/internal/nftables"
 	"github.com/g0lab/g0efilter/internal/policy"
+	"github.com/g0lab/g0efilter/internal/procinfo"
 	"golang.org/x/sys/unix"
 )
 
@@ -51,9 +52,8 @@ var (
 )
 
 type policyUpdate struct {
-	hash    string
-	domains []string
-	ips     []string
+	hash string
+	pol  *policy.Policy
 }
 
 // Run starts the g0efilter application and blocks until shutdown.
@@ -84,12 +84,15 @@ func Run(version, date, commit string) error {
 	signal.Notify(sigCh, os.Interrupt, unix.SIGTERM)
 	defer signal.Stop(sigCh)
 
-	domains, initialHash, err := loadInitialPolicy(ctx, cfg, lg)
+	cfg = setupLearning(ctx, cfg, lg)
+	cfg = setupProcInfo(cfg, lg)
+
+	pol, initialHash, err := loadInitialPolicy(ctx, cfg, lg)
 	if err != nil {
 		return err
 	}
 
-	svcCancel := startServiceGroup(ctx, cfg, domains, lg)
+	svcCancel := startServiceGroup(ctx, cfg, pol, lg)
 
 	defer func() {
 		if svcCancel != nil {
@@ -107,7 +110,7 @@ func Run(version, date, commit string) error {
 
 	startRemoteUnblockPolling(ctx, cfg, lg)
 
-	lg.Info("startup.ready", "mode", cfg.mode, "filter_count", len(domains))
+	lg.Info("startup.ready", "mode", cfg.mode, "filter_count", len(pol.AllowDomains))
 
 	supervise(ctx, cancel, sigCh, reloadCh, cfg, lg, &svcCancel)
 	shutdownGracefully(lg)
@@ -138,6 +141,11 @@ type config struct {
 	logFile             string
 	hostname            string
 	mode                string
+	defaultAction       string // bootstrap default; policy file default_action wins
+	learningMode        bool
+	learner             *learner
+	auditMode           bool
+	procInfo            *procinfo.ProcProvider
 	enableRemoteUnblock bool
 	dashboardHost       string
 	dashboardAPIKey     string
@@ -147,6 +155,7 @@ type config struct {
 }
 
 func loadConfig() config {
+	//nolint:exhaustruct // learner is wired up in Run when learning mode is enabled
 	return config{
 		policyPath:          getenvDefault("POLICY_PATH", "/app/policy.yaml"),
 		httpPort:            getenvDefault("HTTP_PORT", "8080"),
@@ -156,6 +165,9 @@ func loadConfig() config {
 		logFile:             getenvDefault("LOG_FILE", ""),
 		hostname:            getenvDefault("HOSTNAME", ""),
 		mode:                strings.ToLower(getenvDefault("FILTER_MODE", "https")),
+		defaultAction:       strings.ToLower(getenvDefault("DEFAULT_ACTION", policy.DefaultActionDeny)),
+		learningMode:        strings.EqualFold(getenvDefault("LEARNING_MODE", "false"), "true"),
+		auditMode:           strings.EqualFold(getenvDefault("ENFORCE", "block"), "audit"),
 		enableRemoteUnblock: strings.EqualFold(getenvDefault("ENABLE_REMOTE_UNBLOCK", "false"), "true"),
 		dashboardHost:       strings.TrimSpace(getenvDefault("DASHBOARD_HOST", "")),
 		dashboardAPIKey:     strings.TrimSpace(getenvDefault("DASHBOARD_API_KEY", "")),
@@ -163,6 +175,35 @@ func loadConfig() config {
 		notificationHost:    strings.TrimSpace(getenvDefault("NOTIFICATION_HOST", "")),
 		notificationKey:     strings.TrimSpace(getenvDefault("NOTIFICATION_KEY", "")),
 	}
+}
+
+// setupLearning wires up the learner and starts its flush loop when learning mode is on.
+func setupLearning(ctx context.Context, cfg config, lg *slog.Logger) config {
+	if !cfg.learningMode {
+		return cfg
+	}
+
+	cfg.learner = newLearner(cfg.policyPath, lg)
+
+	go cfg.learner.run(ctx)
+
+	lg.Info("learning_mode.enabled",
+		"note", "no traffic will be blocked; observed domains/IPs are appended to the policy file",
+		"path", cfg.policyPath,
+	)
+
+	return cfg
+}
+
+// effectiveDefaultAllow resolves the policy stance: the policy file's default_action
+// wins over the DEFAULT_ACTION env var, which defaults to deny.
+func effectiveDefaultAllow(cfg config, pol *policy.Policy) bool {
+	action := cfg.defaultAction
+	if pol != nil && pol.DefaultAction != "" {
+		action = pol.DefaultAction
+	}
+
+	return action == policy.DefaultActionAllow
 }
 
 func supervise(
@@ -193,12 +234,14 @@ func supervise(
 			lg.Info(
 				"policy.reloaded",
 				"hash", upd.hash,
-				"domain_count", len(upd.domains),
-				"ip_count", len(upd.ips),
+				"domain_count", len(upd.pol.AllowDomains),
+				"ip_count", len(upd.pol.AllowIPs),
+				"deny_domain_count", len(upd.pol.DenyDomains),
+				"deny_ip_count", len(upd.pol.DenyIPs),
 			)
 
-			restartServices(ctx, cfg, upd.domains, lg, svcCancel)
-			lg.Info("policy.applied", "mode", cfg.mode, "filter_count", len(upd.domains))
+			restartServices(ctx, cfg, upd.pol, lg, svcCancel)
+			lg.Info("policy.applied", "mode", cfg.mode, "filter_count", len(upd.pol.AllowDomains))
 
 		case <-ctx.Done():
 			stopServices(svcCancel)
@@ -208,9 +251,9 @@ func supervise(
 	}
 }
 
-func startServiceGroup(ctx context.Context, cfg config, domains []string, lg *slog.Logger) context.CancelFunc {
+func startServiceGroup(ctx context.Context, cfg config, pol *policy.Policy, lg *slog.Logger) context.CancelFunc {
 	svcCtx, cancel := context.WithCancel(ctx)
-	startServices(svcCtx, cfg, domains, lg)
+	startServices(svcCtx, cfg, pol, lg)
 
 	return cancel
 }
@@ -226,12 +269,12 @@ func stopServices(svcCancel *context.CancelFunc) {
 func restartServices(
 	ctx context.Context,
 	cfg config,
-	domains []string,
+	pol *policy.Policy,
 	lg *slog.Logger,
 	svcCancel *context.CancelFunc,
 ) {
 	stopServices(svcCancel)
-	*svcCancel = startServiceGroup(ctx, cfg, domains, lg)
+	*svcCancel = startServiceGroup(ctx, cfg, pol, lg)
 }
 
 func shutdownGracefully(lg *slog.Logger) {
@@ -243,8 +286,8 @@ func shutdownGracefully(lg *slog.Logger) {
 	logging.Shutdown(1 * time.Second)
 }
 
-func loadInitialPolicy(ctx context.Context, cfg config, lg *slog.Logger) ([]string, string, error) {
-	domains, _, err := loadAndApplyPolicy(ctx, cfg, lg)
+func loadInitialPolicy(ctx context.Context, cfg config, lg *slog.Logger) (*policy.Policy, string, error) {
+	pol, err := loadAndApplyPolicy(ctx, cfg, lg)
 	if err != nil {
 		return nil, "", err
 	}
@@ -253,10 +296,10 @@ func loadInitialPolicy(ctx context.Context, cfg config, lg *slog.Logger) ([]stri
 	if err != nil {
 		lg.Warn("policy.hash_read_failed", "path", cfg.policyPath, "err", err)
 
-		return domains, "", nil
+		return pol, "", nil
 	}
 
-	return domains, hash, nil
+	return pol, hash, nil
 }
 
 func getGoVersion() string {
@@ -302,6 +345,9 @@ func logStartupInfo(lg *slog.Logger, cfg config, version, date, commit string) {
 		"nft_version", nftVersion,
 		"build_date", date,
 		"mode", cfg.mode,
+		"default_action", cfg.defaultAction,
+		"learning_mode", cfg.learningMode,
+		"enforce", enforceLabel(cfg.auditMode),
 		"policy_path", cfg.policyPath,
 		"log_level", cfg.logLevel,
 	}
@@ -320,7 +366,7 @@ func logStartupInfo(lg *slog.Logger, cfg config, version, date, commit string) {
 		lg.Debug("startup.ports", "http_port", cfg.httpPort, "https_port", cfg.httpsPort)
 	}
 
-	if cfg.mode == actions.ModeDNS {
+	if isDNSMode(cfg.mode) {
 		lg.Debug("startup.ports", "dns_port", cfg.dnsPort)
 	}
 }
@@ -351,8 +397,15 @@ func logNotificationInfo(lg *slog.Logger, cfg config) {
 }
 
 func normalizeMode(cfg config, lg *slog.Logger) config {
+	switch cfg.defaultAction {
+	case policy.DefaultActionDeny, policy.DefaultActionAllow:
+	default:
+		lg.Warn("default_action.invalid", "default_action", cfg.defaultAction, "defaulting_to", policy.DefaultActionDeny)
+		cfg.defaultAction = policy.DefaultActionDeny
+	}
+
 	switch cfg.mode {
-	case actions.ModeHTTPS, actions.ModeDNS:
+	case actions.ModeHTTPS, actions.ModeDNS, actions.ModeDNSStrict:
 		return cfg
 	case "":
 		cfg.mode = actions.ModeHTTPS
@@ -366,12 +419,39 @@ func normalizeMode(cfg config, lg *slog.Logger) config {
 	}
 }
 
+// isDNSMode reports whether the mode runs the DNS proxy (plain or strict).
+func isDNSMode(mode string) bool {
+	return mode == actions.ModeDNS || mode == actions.ModeDNSStrict
+}
+
+func enforceLabel(audit bool) string {
+	if audit {
+		return "audit"
+	}
+
+	return "block"
+}
+
+// setupProcInfo enables /proc-based process attribution when PROCESS_INFO=true.
+func setupProcInfo(cfg config, lg *slog.Logger) config {
+	if !strings.EqualFold(getenvDefault("PROCESS_INFO", "false"), "true") {
+		return cfg
+	}
+
+	cfg.procInfo = procinfo.New()
+
+	lg.Info("process_info.enabled",
+		"note", "flow logs carry pid/process attribution; requires a shared PID namespace with clients")
+
+	return cfg
+}
+
 func validatePorts(cfg config, lg *slog.Logger) error {
 	if cfg.mode == actions.ModeHTTPS && cfg.httpPort == cfg.httpsPort {
 		return fmt.Errorf("%w: HTTP_PORT and HTTPS_PORT cannot be the same (%s)", errPortConflict, cfg.httpPort)
 	}
 
-	if cfg.mode == actions.ModeDNS {
+	if isDNSMode(cfg.mode) {
 		if cfg.dnsPort == cfg.httpPort {
 			lg.Warn(
 				"config.port_overlap",
@@ -394,27 +474,56 @@ func validatePorts(cfg config, lg *slog.Logger) error {
 	return nil
 }
 
-func loadAndApplyPolicy(ctx context.Context, cfg config, lg *slog.Logger) ([]string, []string, error) {
-	ips, domains, err := policy.ReadPolicy(cfg.policyPath)
+func loadAndApplyPolicy(ctx context.Context, cfg config, lg *slog.Logger) (*policy.Policy, error) {
+	pol, err := policy.Read(cfg.policyPath)
 	if err != nil {
 		lg.Error("policy.read_error", "path", cfg.policyPath, "err", err)
 
-		return nil, nil, fmt.Errorf("failed to read policy: %w", err)
+		return nil, fmt.Errorf("failed to read policy: %w", err)
 	}
 
-	lg.Info("policy.loaded", "domain_count", len(domains), "ip_count", len(ips))
-	lg.Debug("policy.loaded.details", "domains", domains, "ips", ips)
+	defaultAllow := effectiveDefaultAllow(cfg, pol)
 
-	err = nftables.ApplyNftRulesWithContext(ctx, ips, cfg.httpsPort, cfg.httpPort, cfg.dnsPort)
+	lg.Info("policy.loaded",
+		"default_allow", defaultAllow,
+		"domain_count", len(pol.AllowDomains),
+		"ip_count", len(pol.AllowIPs),
+		"deny_domain_count", len(pol.DenyDomains),
+		"deny_ip_count", len(pol.DenyIPs),
+	)
+	lg.Debug("policy.loaded.details",
+		"domains", pol.AllowDomains, "ips", pol.AllowIPs,
+		"deny_domains", pol.DenyDomains, "deny_ips", pol.DenyIPs,
+	)
+
+	if !defaultAllow && !cfg.learningMode && (len(pol.DenyIPs) > 0 || len(pol.DenyDomains) > 0) {
+		lg.Warn("policy.denylist_ignored",
+			"reason", "default_action is deny; denylist only applies with default_action: allow")
+	}
+
+	rules := nftables.PolicyRules{
+		AllowIPs:     pol.AllowIPs,
+		DenyIPs:      pol.DenyIPs,
+		DefaultAllow: defaultAllow,
+		Audit:        cfg.auditMode,
+	}
+
+	// Learning mode must never block: force a permissive ruleset with no IP denies.
+	if cfg.learningMode {
+		rules.DefaultAllow = true
+		rules.DenyIPs = nil
+	}
+
+	err = nftables.ApplyPolicyRulesWithContext(ctx, rules, cfg.httpsPort, cfg.httpPort, cfg.dnsPort)
 	if err != nil {
 		lg.Error("nftables.apply_failed", "err", err)
 
-		return nil, nil, fmt.Errorf("apply nftables rules: %w", err)
+		return nil, fmt.Errorf("apply nftables rules: %w", err)
 	}
 
 	lg.Info("nftables.applied")
 
-	return domains, ips, nil
+	return pol, nil
 }
 
 func runServiceWithRetry(ctx context.Context, serviceName string, lg *slog.Logger, serviceFunc func() error) {
@@ -450,19 +559,61 @@ func runServiceWithRetry(ctx context.Context, serviceName string, lg *slog.Logge
 	}()
 }
 
-func startServices(ctx context.Context, cfg config, domains []string, lg *slog.Logger) {
+func startServices(ctx context.Context, cfg config, pol *policy.Policy, lg *slog.Logger) {
+	//nolint:exhaustruct
 	opts := filter.Options{
-		DialTimeout: defaultDialTimeout,
-		IdleTimeout: defaultIdleTimeout,
-		DropWithRST: true,
-		Logger:      lg,
+		DialTimeout:  defaultDialTimeout,
+		IdleTimeout:  defaultIdleTimeout,
+		DropWithRST:  true,
+		Logger:       lg,
+		DefaultAllow: effectiveDefaultAllow(cfg, pol),
+		Denylist:     pol.DenyDomains,
+		LearningMode: cfg.learningMode,
+		OnLearn:      learnFunc(cfg.learner),
+		AuditMode:    cfg.auditMode,
+		DNSHardening: strings.EqualFold(getenvDefault("DNS_HARDENING", "true"), "true"),
 	}
 
-	switch cfg.mode {
-	case actions.ModeDNS:
-		startDNSService(ctx, cfg.dnsPort, domains, opts, lg)
-	default:
-		startHTTPSServices(ctx, cfg, domains, opts, lg)
+	// Assign conditionally: wrapping a nil pointer would make the interface non-nil
+	if cfg.procInfo != nil {
+		opts.ProcInfo = cfg.procInfo
+	}
+
+	if cfg.mode == actions.ModeDNSStrict {
+		opts.OnResolved = strictResolvedHook(ctx, opts, lg)
+	}
+
+	if isDNSMode(cfg.mode) {
+		startDNSService(ctx, cfg.dnsPort, pol.AllowDomains, opts, lg)
+
+		return
+	}
+
+	startHTTPSServices(ctx, cfg, pol.AllowDomains, opts, lg)
+}
+
+// strictResolvedHook returns the dns-strict callback that pushes resolved IPs into
+// the kernel timeout set. Under default-allow or learning mode the ruleset is
+// permissive, so strict enforcement degrades to plain DNS mode with a warning.
+func strictResolvedHook(
+	ctx context.Context,
+	opts filter.Options,
+	lg *slog.Logger,
+) func(ips []string, ttl uint32) {
+	if opts.DefaultAllow || opts.LearningMode {
+		lg.Warn("dns_strict.degraded",
+			"reason", "default_action=allow or learning mode active; connection-time enforcement disabled",
+			"behaves_as", actions.ModeDNS,
+		)
+
+		return nil
+	}
+
+	return func(ips []string, ttl uint32) {
+		err := nftables.AddResolvedIPs(ctx, ips, time.Duration(ttl)*time.Second)
+		if err != nil {
+			lg.Warn("dns_strict.set_update_failed", "ips", ips, "err", err)
+		}
 	}
 }
 
@@ -593,20 +744,14 @@ func checkPolicyTick(
 
 	lg.Info("policy.change_detected", "old_hash", lastHash, "new_hash", newHash)
 
-	domains, ips, err := loadAndApplyPolicy(ctx, cfg, lg)
+	pol, err := loadAndApplyPolicy(ctx, cfg, lg)
 	if err != nil {
 		lg.Error("policy.reload_failed", "err", err)
 
 		return lastHash
 	}
 
-	upd := policyUpdate{
-		hash:    newHash,
-		domains: append([]string(nil), domains...),
-		ips:     append([]string(nil), ips...),
-	}
-
-	sendLatest(ctx, reloadCh, upd)
+	sendLatest(ctx, reloadCh, policyUpdate{hash: newHash, pol: pol})
 
 	return newHash
 }

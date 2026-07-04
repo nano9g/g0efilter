@@ -575,9 +575,9 @@ func logToTerminal(zl zerolog.Logger, level slog.Level, msg string, attrs map[st
 
 // shouldShipToDashboard determines if an event should be sent to the dashboard.
 func shouldShipToDashboard(act string, attrs map[string]any) bool {
-	// Only ship BLOCKED and ALLOWED actions
+	// Only ship BLOCKED, ALLOWED and AUDIT actions
 	// REDIRECTED stays in console logs only (debug level)
-	if act != actions.ActionBlocked && act != actions.ActionAllowed {
+	if act != actions.ActionBlocked && act != actions.ActionAllowed && act != actions.ActionAudit {
 		return false
 	}
 
