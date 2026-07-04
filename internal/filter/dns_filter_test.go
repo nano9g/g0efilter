@@ -655,6 +655,7 @@ func TestHandleAllowedRequest(t *testing.T) {
 		"192.168.1.1",
 		12345,
 		"test-flow-id",
+		true,
 	)
 
 	// Should have attempted to forward the request
