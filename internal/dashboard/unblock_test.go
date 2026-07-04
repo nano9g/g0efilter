@@ -492,7 +492,7 @@ func TestUnblockStore_MaxCompleted(t *testing.T) {
 		t.Errorf("completed length = %d, want 100 (bounded)", len(completed))
 	}
 
-	// Oldest entries should have been trimmed — last entry should be d109.com
+	// Oldest entries should have been trimmed - last entry should be d109.com
 	last := completed[len(completed)-1]
 	if last.Value != "d109.com" {
 		t.Errorf("last completed = %s, want d109.com", last.Value)
