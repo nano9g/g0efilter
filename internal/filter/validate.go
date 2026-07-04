@@ -9,6 +9,8 @@ const (
 	maxHostLength      = 253 // RFC 1035
 	maxLabelLength     = 63  // RFC 1035
 	minValidHostLength = 1   // At least one character
+
+	unknownValue = "unknown"
 )
 
 // sanitizeHost validates and sanitizes a host/domain extracted from HTTP Host header or TLS SNI.
@@ -86,7 +88,7 @@ func determineStructureFailureReason(host string) string {
 		return "contains_double_dot"
 	}
 
-	return "unknown"
+	return unknownValue
 }
 
 func determineLabelFailureReason(host string) string {
@@ -101,7 +103,7 @@ func determineLabelFailureReason(host string) string {
 		}
 	}
 
-	return "unknown"
+	return unknownValue
 }
 
 func checkLabelValidity(label string, isTLD bool) string {
