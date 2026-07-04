@@ -13,6 +13,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,6 +22,8 @@ import (
 	"unsafe"
 
 	"github.com/g0lab/g0efilter/internal/actions"
+	"github.com/g0lab/g0efilter/internal/policy"
+	"github.com/g0lab/g0efilter/internal/procinfo"
 	"golang.org/x/net/idna"
 	"golang.org/x/sys/unix"
 )
@@ -46,11 +49,71 @@ type Options struct {
 	IdleTimeout int // ms
 	DropWithRST bool
 	Logger      *slog.Logger
+
+	// DefaultAllow inverts the policy stance: traffic passes unless it matches
+	// Denylist, with the allowlist acting as an explicit override.
+	DefaultAllow bool
+	Denylist     []string
+
+	// LearningMode never blocks; hosts/IPs not already covered by the allowlist
+	// are reported through OnLearn so they can be recorded in the policy.
+	LearningMode bool
+	OnLearn      func(kind, value string) // kind is "domain" or "ip"
+
+	// OnResolved receives the A/AAAA addresses from each allowed DNS answer
+	// (dns-strict mode) so they can be pushed into the kernel's resolved set
+	// before the response reaches the client.
+	OnResolved func(ips []string, ttl uint32)
+
+	// AuditMode is dry-run enforcement: traffic that would be blocked is logged
+	// with the AUDIT action and allowed through, so a policy's impact can be
+	// previewed before enforcing it.
+	AuditMode bool
+
+	// ProcInfo, when set, resolves the client process behind each logged flow
+	// (requires a shared PID namespace). Lookups run only in the logging path.
+	ProcInfo procinfo.Provider
+
+	// DNSHardening enables anti-exfil checks in the DNS proxy: qname/label length
+	// caps, NULL/oversized-TXT response rejection, and per-source rate limiting.
+	// Under audit/learning mode violations are logged but not blocked (except the
+	// rate limit, which protects the proxy itself).
+	DNSHardening bool
 }
 
-// normalizeDomain converts a domain to lowercase ASCII form.
+// procFields returns process-attribution log fields for a flow, degrading to
+// process_name=unknown when the socket or PID cannot be resolved.
+func procFields(opts Options, sourceIP string, sourcePort int, proto string) []any {
+	if opts.ProcInfo == nil {
+		return nil
+	}
+
+	info, ok := opts.ProcInfo.Lookup(sourceIP, sourcePort, proto)
+	if !ok {
+		return []any{"process_name", unknownValue}
+	}
+
+	return []any{
+		"pid", info.PID,
+		"process_name", info.Name,
+		"cmdline", info.Cmdline,
+		"executable", info.Executable,
+	}
+}
+
+// audited reports whether a non-permitted host should pass anyway under audit mode.
+func audited(permitted bool, opts Options) bool {
+	return !permitted && opts.AuditMode
+}
+
+// normalizeDomain converts a domain to lowercase ASCII form. Regex patterns pass through untouched.
 func normalizeDomain(domain string) string {
-	domain = strings.TrimSpace(strings.ToLower(strings.TrimSuffix(domain, ".")))
+	domain = strings.TrimSpace(domain)
+	if policy.IsRegexPattern(domain) {
+		return domain
+	}
+
+	domain = strings.ToLower(strings.TrimSuffix(domain, "."))
 	if domain == "*" {
 		return domain
 	}
@@ -73,26 +136,106 @@ func NormalizePatterns(patterns []string) []string {
 	return out
 }
 
+// regexCache holds compiled /regex/ and wildcard patterns. Patterns come from the
+// validated policy file, so the cache is bounded by policy size. Regex keys start
+// with '/' and wildcard keys don't, so the two kinds cannot collide.
+var regexCache sync.Map //nolint:gochecknoglobals
+
+func cachedCompile(pattern string, compile func(string) (*regexp.Regexp, error)) *regexp.Regexp {
+	if cached, ok := regexCache.Load(pattern); ok {
+		re, _ := cached.(*regexp.Regexp)
+
+		return re
+	}
+
+	re, err := compile(pattern)
+	if err != nil {
+		re = nil
+	}
+
+	regexCache.Store(pattern, re)
+
+	return re
+}
+
 // allowedHost checks if a host matches the pre-normalized allowlist patterns.
 func allowedHost(host string, allowlist []string) bool {
 	host = normalizeDomain(host)
 
 	for _, pattern := range allowlist {
-		if pattern == "*" {
-			return true
-		}
-
-		if strings.HasPrefix(pattern, "*.") {
-			suffix := pattern[1:] // e.g. ".google.com"
-			if strings.HasSuffix(host, suffix) && len(host) > len(suffix) {
-				return true
-			}
-		} else if host == pattern {
+		if matchPattern(host, pattern) {
 			return true
 		}
 	}
 
 	return false
+}
+
+// matchPattern matches a normalized host against one exact, wildcard, or /regex/ pattern.
+func matchPattern(host, pattern string) bool {
+	if pattern == "*" {
+		return true
+	}
+
+	switch {
+	case policy.IsRegexPattern(pattern):
+		re := cachedCompile(pattern, policy.CompileDomainPattern)
+
+		return re != nil && re.MatchString(host)
+	case strings.HasPrefix(pattern, "*.") && !strings.Contains(pattern[2:], "*"):
+		suffix := pattern[1:] // e.g. ".google.com"
+
+		return strings.HasSuffix(host, suffix) && len(host) > len(suffix)
+	case strings.Contains(pattern, "*"):
+		// Mid-name wildcards, e.g. sub.*.sub.domain.com
+		re := cachedCompile(pattern, policy.CompileWildcardPattern)
+
+		return re != nil && re.MatchString(host)
+	default:
+		return host == pattern
+	}
+}
+
+// hostPermitted applies the policy decision for a host observed by a filter.
+// Learning mode never blocks. With DefaultAllow, a host passes unless it matches
+// the denylist, and an allowlist match always overrides the denylist. An empty
+// host (no SNI/Host header) is blocked under default-deny but passes under
+// default-allow, since there is nothing to match against the denylist.
+func hostPermitted(host string, allowlist []string, opts Options) bool {
+	if opts.LearningMode {
+		return true
+	}
+
+	if !opts.DefaultAllow {
+		return host != "" && allowedHost(host, allowlist)
+	}
+
+	if host == "" || allowedHost(host, allowlist) {
+		return true
+	}
+
+	return !allowedHost(host, opts.Denylist)
+}
+
+// maybeLearnHost reports a host to the learning callback when it is not already allowlisted.
+func maybeLearnHost(host string, allowlist []string, opts Options) {
+	if !opts.LearningMode || opts.OnLearn == nil || host == "" {
+		return
+	}
+
+	if !allowedHost(host, allowlist) {
+		opts.OnLearn("domain", host)
+	}
+}
+
+// maybeLearnIP reports a destination IP to the learning callback (used when no
+// domain identifier is available for the connection).
+func maybeLearnIP(destIP string, opts Options) {
+	if !opts.LearningMode || opts.OnLearn == nil || destIP == "" {
+		return
+	}
+
+	opts.OnLearn("ip", destIP)
 }
 
 // newDialerFromOptions creates a network dialer with the timeout from Options and SO_MARK set to bypass iptables.
@@ -457,6 +600,32 @@ func serveTCP(
 	}
 }
 
+// baseLogFields builds the shared decision-log fields for a component.
+func baseLogFields(component, action, identifier, sourceIP string, sourcePort int) []any {
+	var identifierKey string
+
+	switch component {
+	case componentHTTPS:
+		identifierKey = componentHTTPS
+	case componentHTTP:
+		identifierKey = "host"
+	default:
+		identifierKey = "identifier"
+	}
+
+	const fieldCap = 24 // room for dest/flow/proc fields appended by callers
+
+	fields := make([]any, 0, fieldCap)
+
+	return append(fields,
+		"component", component,
+		"action", action,
+		identifierKey, identifier,
+		"source_ip", sourceIP,
+		"source_port", sourcePort,
+	)
+}
+
 // logAllowedConnection logs when a connection is allowed through the filter.
 func logAllowedConnection(opts Options, component, target, identifier string, conn net.Conn) {
 	if opts.Logger == nil {
@@ -467,33 +636,34 @@ func logAllowedConnection(opts Options, component, target, identifier string, co
 	destIP, destPort := parseHostPort(target)
 	flowID := actions.FlowID(sourceIP, sourcePort, destIP, destPort, "tcp")
 
-	var identifierKey string
-
-	switch component {
-	case componentHTTPS:
-		identifierKey = componentHTTPS
-	case componentHTTP:
-		identifierKey = "host"
-	default:
-		identifierKey = "identifier"
-	}
-
-	opts.Logger.Info(component+".allowed",
-		"component", component,
-		"action", actions.ActionAllowed,
-		identifierKey, identifier,
-		"source_ip", sourceIP,
-		"source_port", sourcePort,
+	fields := baseLogFields(component, actions.ActionAllowed, identifier, sourceIP, sourcePort)
+	fields = append(fields,
 		"destination_ip", destIP,
 		"destination_port", destPort,
 		"dst", net.JoinHostPort(destIP, strconv.Itoa(destPort)),
 		"flow_id", flowID,
 	)
+	fields = append(fields, procFields(opts, sourceIP, sourcePort, "tcp")...)
+
+	opts.Logger.Info(component+".allowed", fields...)
 }
 
 // logBlockedConnection logs when a connection is blocked by the filter.
 func logBlockedConnection(
 	opts Options, component, reason, identifier string, conn net.Conn, destIP string, destPort int,
+) {
+	logPolicyViolation(opts, component, actions.ActionBlocked, reason, identifier, conn, destIP, destPort)
+}
+
+// logAuditedConnection logs a would-be-blocked connection that audit mode let through.
+func logAuditedConnection(
+	opts Options, component, reason, identifier string, conn net.Conn, destIP string, destPort int,
+) {
+	logPolicyViolation(opts, component, actions.ActionAudit, reason, identifier, conn, destIP, destPort)
+}
+
+func logPolicyViolation(
+	opts Options, component, action, reason, identifier string, conn net.Conn, destIP string, destPort int,
 ) {
 	if opts.Logger == nil {
 		return
@@ -501,25 +671,8 @@ func logBlockedConnection(
 
 	sourceIP, sourcePort := sourceAddr(conn)
 
-	var identifierKey string
-
-	switch component {
-	case componentHTTPS:
-		identifierKey = componentHTTPS
-	case componentHTTP:
-		identifierKey = "host"
-	default:
-		identifierKey = "identifier"
-	}
-
-	fields := []any{
-		"component", component,
-		"action", actions.ActionBlocked,
-		identifierKey, identifier,
-		"reason", reason,
-		"source_ip", sourceIP,
-		"source_port", sourcePort,
-	}
+	fields := baseLogFields(component, action, identifier, sourceIP, sourcePort)
+	fields = append(fields, "reason", reason)
 
 	if destIP != "" {
 		flowID := actions.FlowID(sourceIP, sourcePort, destIP, destPort, "tcp")
@@ -531,7 +684,9 @@ func logBlockedConnection(
 		)
 	}
 
-	opts.Logger.Info(component+".blocked", fields...)
+	fields = append(fields, procFields(opts, sourceIP, sourcePort, "tcp")...)
+
+	opts.Logger.Info(component+"."+strings.ToLower(action), fields...)
 }
 
 // logdstConnDialError logs when connecting to the destination target fails.
