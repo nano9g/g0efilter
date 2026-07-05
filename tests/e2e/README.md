@@ -28,7 +28,12 @@ container logs on failure, and tears down (restoring the baseline policy file).
 | `08_learning.sh` | learning mode: nothing blocked, observed domains/IPs appended to policy |
 | `09_dns_strict.sh` | dns-strict: resolved IPs land in kernel timeout sets, never-resolved IPs dropped (dns lane only) |
 | `10_audit.sh` | audit (dry-run) enforcement: would-be-blocked traffic passes and reaches the dashboard as AUDIT (https lane only) |
+| `11_resources.sh` | coarse CPU and memory guardrails after modest allowed/blocked traffic |
 
-Individual phase scripts assume the stack is already up (except `08_learning.sh`,
-which recreates the g0efilter container with `LEARNING_MODE=true`). Shared helpers
-live in `lib.sh`.
+Individual phase scripts assume the stack is already up, though mode-specific
+phases may recreate the g0efilter container with different environment flags.
+Shared helpers live in `lib.sh`.
+
+The resource guardrail thresholds are intentionally conservative and can be
+overridden with `E2E_MAX_MEMORY_MIB`, `E2E_MAX_MEMORY_GROWTH_MIB`,
+`E2E_MAX_IDLE_CPU_PERCENT`, and `E2E_CPU_SAMPLE_SECONDS`.
