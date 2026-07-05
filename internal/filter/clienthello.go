@@ -15,6 +15,8 @@ const (
 	recordTypeHandshake      = 22
 	handshakeTypeClientHello = 1
 	handshakeHeaderLen       = 4
+	extTypeServerName        = 0
+	nameTypeHostName         = 0
 
 	maxRecordSize      = 16384 + 2048
 	maxClientHelloSize = 65536
@@ -127,7 +129,7 @@ func sniFromExtensions(extensions cryptobyte.String) (string, error) {
 			return "", errMalformedExtension
 		}
 
-		if extType == 0 {
+		if extType == extTypeServerName {
 			return sniFromServerNameExt(extData)
 		}
 	}
@@ -152,7 +154,7 @@ func sniFromServerNameExt(extData cryptobyte.String) (string, error) {
 			return "", errMalformedExtension
 		}
 
-		if nameType == 0 { // host_name
+		if nameType == nameTypeHostName {
 			return string(name), nil
 		}
 	}

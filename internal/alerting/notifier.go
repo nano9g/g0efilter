@@ -351,7 +351,6 @@ func (n *Notifier) sendNotification(ctx context.Context, info BlockedConnectionI
 		_ = resp.Body.Close()
 	}()
 
-	// Ignore non-2xx responses silently (avoid log spam)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		slog.Warn("notification.rejected", "host", n.host, "status", resp.StatusCode)
 

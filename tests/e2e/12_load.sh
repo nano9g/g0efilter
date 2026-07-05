@@ -141,6 +141,7 @@ out=$(run_tester "$mixed" "$ALLOWED_UNDER_LOAD" "$L2_BLOCKED" "$MAX_TIME" "$ALLO
 
 ok=$(printf '%s\n' "$out" | sed -n 's/^OK=//p')
 leaks=$(printf '%s\n' "$out" | sed -n 's/^LEAKS=//p')
+[ "$ALLOWED_UNDER_LOAD" -gt 0 ] || fail "LOAD_ALLOWED must be greater than 0"
 allowed_pct=$((ok * 100 / ALLOWED_UNDER_LOAD))
 log "[L2] allowed ok=$ok/$ALLOWED_UNDER_LOAD (${allowed_pct}%), blocked leaks=$leaks"
 add_row "L2 mixed" "allowed $ok/$ALLOWED_UNDER_LOAD (${allowed_pct}%)" "leaks=$leaks"
