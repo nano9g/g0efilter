@@ -22,6 +22,7 @@ import (
 	"unsafe"
 
 	"github.com/g0lab/g0efilter/internal/actions"
+	"github.com/g0lab/g0efilter/internal/netutil"
 	"github.com/g0lab/g0efilter/internal/policy"
 	"github.com/g0lab/g0efilter/internal/procinfo"
 	"golang.org/x/net/idna"
@@ -29,7 +30,6 @@ import (
 )
 
 const (
-	bypassMark            = 0x1             // SO_MARK to bypass nftables REDIRECT
 	defaultTTL            = 60              // DNS response TTL in seconds
 	connectionReadTimeout = 5 * time.Second // Timeout for initial connection reads
 
@@ -254,27 +254,7 @@ func timeoutFromOptions(opts Options, defaultTimeout time.Duration) time.Duratio
 
 // newMarkedDialer creates a network dialer with SO_MARK set to bypass iptables REDIRECT rules.
 func newMarkedDialer(dialTimeout time.Duration) *net.Dialer {
-	dialer := &net.Dialer{
-		Timeout: dialTimeout,
-		Control: func(_ string, _ string, rc syscall.RawConn) error {
-			var serr error
-
-			err := rc.Control(func(fd uintptr) {
-				serr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_MARK, bypassMark)
-			})
-			if err != nil {
-				return fmt.Errorf("socket control error: %w", err)
-			}
-
-			if serr != nil {
-				return fmt.Errorf("set socket mark: %w", serr)
-			}
-
-			return nil
-		},
-	}
-
-	return dialer
+	return netutil.MarkedDialer(dialTimeout)
 }
 
 // setConnTimeouts applies idle timeout deadlines to both client and backend connections if configured.
@@ -686,7 +666,7 @@ func logPolicyViolation(
 
 	fields = append(fields, procFields(opts, sourceIP, sourcePort, "tcp")...)
 
-	opts.Logger.Info(component+"."+strings.ToLower(action), fields...)
+	opts.Logger.Warn(component+"."+strings.ToLower(action), fields...)
 }
 
 // logdstConnDialError logs when connecting to the destination target fails.

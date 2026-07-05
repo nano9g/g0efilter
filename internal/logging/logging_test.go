@@ -1370,3 +1370,43 @@ func TestAlertingOnlyBlockedEvents(t *testing.T) {
 		}
 	}
 }
+
+// BLOCKED events must reach the notifier even when the terminal log level
+// filters them out (issue #109: no notifications with LOG_LEVEL=WARN/ERROR).
+func TestAlertingBelowTerminalLevel(t *testing.T) {
+	notificationReceived := make(chan bool, 1)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+
+		notificationReceived <- true
+	}))
+	defer server.Close()
+
+	t.Setenv("NOTIFICATION_HOST", server.URL)
+	t.Setenv("NOTIFICATION_KEY", "test-token-123")
+	t.Setenv("HOSTNAME", "test-g0efilter")
+
+	logger := NewWithContext(context.Background(), "ERROR", io.Discard, "test-version")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	logger.WarnContext(ctx, "https.blocked",
+		"component", "https",
+		"action", "BLOCKED",
+		"https", "evil.example.com",
+		"source_ip", "192.168.1.100",
+		"source_port", 12345,
+		"destination_ip", "1.2.3.4",
+		"destination_port", 443,
+		"reason", "not-allowlisted",
+	)
+
+	select {
+	case <-notificationReceived:
+		// Success
+	case <-time.After(2 * time.Second):
+		t.Error("Notification was not received when log level is above the event level")
+	}
+}

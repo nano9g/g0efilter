@@ -210,10 +210,11 @@ func TestConnectAndSpliceHTTPS(t *testing.T) {
 
 	buf := bytes.NewBuffer([]byte{})
 
-	// Test connectAndSpliceHTTPS - expected to fail in test environment
-	err := connectAndSpliceHTTPS(mockConn, buf, "example.com:443", opts)
-	if err != nil {
-		t.Logf("connectAndSpliceHTTPS failed as expected: %v", err)
+	// Dial a closed local port: exercises the dial-failure path without depending
+	// on the network (a reachable target would splice against mockConn and hang).
+	err := connectAndSpliceHTTPS(mockConn, buf, "127.0.0.1:1", opts)
+	if err == nil {
+		t.Error("expected dial error for closed port")
 	}
 }
 

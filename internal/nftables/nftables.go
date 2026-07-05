@@ -1148,11 +1148,11 @@ func processActionEvent(
 	)
 	fields = append(fields, "action", action)
 
-	// Level policy: REDIRECTED and ALLOWED at DEBUG, BLOCKED at INFO
+	// Level policy: REDIRECTED and ALLOWED at DEBUG, BLOCKED at WARN
 	if action == actions.ActionRedirected || action == actions.ActionAllowed {
 		lg.Debug("nflog.event", fields...)
 	} else {
-		lg.Info("nflog.event", fields...)
+		lg.Warn("nflog.event", fields...)
 	}
 }
 

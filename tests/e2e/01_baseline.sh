@@ -17,6 +17,13 @@ fi
 assert_blocked https://google.com
 assert_blocked http://google.com
 
+log "[Log level] Blocked decisions must log at WARN"
+if ! $COMPOSE logs g0efilter | sed 's/\x1b\[[0-9;]*m//g' | grep -E "WRN.*\.blocked" | grep -q "action=BLOCKED"; then
+  dump_logs
+  fail "no WRN-level blocked log line found (blocked decisions must log at WARN)"
+fi
+log "OK: blocked decisions log at WARN"
+
 if [ "$FILTER_MODE" = "https" ]; then
   assert_blocked https://1.0.0.1
   assert_blocked http://1.0.0.1

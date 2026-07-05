@@ -336,7 +336,7 @@ func (handler *dnsHandler) blockExfilQuery(
 
 		fields := handler.dnsLogFields(action, qname, qtype, remoteAddr, remotePort, flowID)
 		fields = append(fields, "reason", reason, "note", "dns-hardening")
-		lg.Info("dns.hardening", fields...)
+		lg.Warn("dns.hardening", fields...)
 	}
 
 	if !enforce {
@@ -380,7 +380,7 @@ func (handler *dnsHandler) blockExfilResponse(
 
 		fields := handler.dnsLogFields(action, qname, qtype, remoteAddr, remotePort, flowID)
 		fields = append(fields, "reason", reason, "note", "dns-hardening")
-		lg.Info("dns.hardening", fields...)
+		lg.Warn("dns.hardening", fields...)
 	}
 
 	if !enforce {
@@ -432,7 +432,7 @@ func (handler *dnsHandler) logAuditedQuery(
 
 	fields := handler.dnsLogFields("AUDIT", qname, qtype, remoteAddr, remotePort, flowID)
 	fields = append(fields, "note", "would-be-blocked")
-	lg.Info("dns.audit", fields...)
+	lg.Warn("dns.audit", fields...)
 }
 
 // handleBlockedEnforcedType handles blocked A/AAAA queries by responding with a sinkhole address.
@@ -449,7 +449,7 @@ func (handler *dnsHandler) handleBlockedEnforcedType(
 	if lg != nil {
 		fields := handler.dnsLogFields("BLOCKED", qname, qtype, remoteAddr, remotePort, flowID)
 		fields = append(fields, "note", "sinkholed-not-allowlisted")
-		lg.Info("dns.blocked", fields...)
+		lg.Warn("dns.blocked", fields...)
 	}
 
 	message := new(dns.Msg)
@@ -485,7 +485,7 @@ func (handler *dnsHandler) handleBlockedNonEnforcedType(
 	if lg != nil {
 		fields := handler.dnsLogFields("BLOCKED", qname, qtype, remoteAddr, remotePort, flowID)
 		fields = append(fields, "note", "nxdomain")
-		lg.Info("dns.blocked", fields...)
+		lg.Warn("dns.blocked", fields...)
 	}
 
 	handler.respondWithError(writer, request, dns.RcodeNameError)
