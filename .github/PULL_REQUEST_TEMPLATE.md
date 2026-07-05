@@ -2,10 +2,6 @@
 
 ## Screenshots
 
-## AI Usage
-
-Briefly note any meaningful AI assistance, or write `None`.
-
 ## Contributing Guidelines
 
 Have you read the [Contributing Guidelines](https://github.com/g0lab/g0efilter/blob/main/CONTRIBUTING.md)?
