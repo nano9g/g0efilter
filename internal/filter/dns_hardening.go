@@ -115,6 +115,12 @@ func (l *dnsRateLimiter) allow(source string) bool {
 			l.pruneLocked(now)
 		}
 
+		// A flood of fresh spoofed sources defeats idle pruning; evict the
+		// longest-idle bucket so the map stays bounded.
+		if len(l.buckets) >= rateLimiterMaxSources {
+			l.evictOldestLocked()
+		}
+
 		bucket = &tokenBucket{tokens: dnsRateLimitBurst, last: now}
 		l.buckets[source] = bucket
 	}
@@ -140,5 +146,23 @@ func (l *dnsRateLimiter) pruneLocked(now time.Time) {
 		if now.Sub(bucket.last) > rateLimiterIdleEvict {
 			delete(l.buckets, src)
 		}
+	}
+}
+
+func (l *dnsRateLimiter) evictOldestLocked() {
+	var (
+		oldestSrc string
+		oldestAt  time.Time
+	)
+
+	for src, bucket := range l.buckets {
+		if oldestSrc == "" || bucket.last.Before(oldestAt) {
+			oldestSrc = src
+			oldestAt = bucket.last
+		}
+	}
+
+	if oldestSrc != "" {
+		delete(l.buckets, oldestSrc)
 	}
 }

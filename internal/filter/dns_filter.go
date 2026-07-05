@@ -119,23 +119,22 @@ type dnsHandler struct {
 	limiter   *dnsRateLimiter
 }
 
-// sanitizeAndLogQname validates and sanitizes DNS query name, logging the result.
-// Returns the sanitized qname (or empty string if invalid).
+// sanitizeAndLogQname validates and sanitizes the DNS query name. ok is false
+// when a name was present but invalid; such queries must be refused, not policy-checked.
 func (handler *dnsHandler) sanitizeAndLogQname(
 	lg *slog.Logger,
 	rawQname string,
 	qtype uint16,
 	remoteAddr string,
 	remotePort int,
-) string {
+) (string, bool) {
 	qname := strings.TrimSuffix(rawQname, ".")
 
 	// Validate and sanitize DNS query name before using in logs
-	sanitizedQname, valid := sanitizeHostWithLogger(qname, lg, "dns")
+	sanitizedQname, valid := sanitizeDNSQname(qname)
 	if !valid && qname != "" {
-		// Query name present but invalid - log and treat as blocked
 		if lg != nil {
-			lg.Debug("dns.qname_invalid",
+			lg.Info("dns.qname_invalid",
 				"raw_qname", qname,
 				"qtype", typeString(qtype),
 				"source_ip", remoteAddr,
@@ -143,7 +142,7 @@ func (handler *dnsHandler) sanitizeAndLogQname(
 			)
 		}
 
-		return "" // Treat invalid qname as empty
+		return "", false
 	}
 
 	if valid {
@@ -160,7 +159,7 @@ func (handler *dnsHandler) sanitizeAndLogQname(
 		)
 	}
 
-	return qname
+	return qname, true
 }
 
 // handle processes incoming DNS requests and enforces the allowlist policy.
@@ -182,8 +181,16 @@ func (handler *dnsHandler) handle(writer dns.ResponseWriter, request *dns.Msg) {
 	}
 
 	question := request.Question[0]
-	qname := handler.sanitizeAndLogQname(lg, question.Name, question.Qtype, remoteAddr, remotePort)
+	qname, qnameOK := handler.sanitizeAndLogQname(lg, question.Name, question.Qtype, remoteAddr, remotePort)
 	qtype := question.Qtype
+
+	// Refused in every policy mode: an invalid name passed through as "" would
+	// bypass the denylist and hardening checks under default-allow.
+	if !qnameOK {
+		handler.respondWithError(writer, request, dns.RcodeRefused)
+
+		return
+	}
 
 	if handler.blockExfilQuery(lg, writer, request, qname, qtype, remoteAddr, remotePort, flowID) {
 		return
@@ -559,8 +566,9 @@ func (handler *dnsHandler) reportResolvedIPs(lg *slog.Logger, resp *dns.Msg, qna
 // TTL across them.
 func extractAnswerIPs(resp *dns.Msg) ([]string, uint32) {
 	var (
-		ips    []string
-		minTTL uint32
+		ips     []string
+		minTTL  uint32
+		haveTTL bool
 	)
 
 	for _, rr := range resp.Answer {
@@ -582,8 +590,9 @@ func extractAnswerIPs(resp *dns.Msg) ([]string, uint32) {
 		ips = append(ips, ip.String())
 
 		ttl := rr.Header().Ttl
-		if minTTL == 0 || ttl < minTTL {
+		if !haveTTL || ttl < minTTL {
 			minTTL = ttl
+			haveTTL = true
 		}
 	}
 

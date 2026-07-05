@@ -201,6 +201,44 @@ func isValidTLD(tld string) bool {
 	return true
 }
 
+// sanitizeDNSQname validates a DNS query name and returns it lowercased. Unlike
+// HTTP/SNI hosts, underscore labels (_dmarc, _service._proto) and bare
+// single-label names are legal in DNS queries.
+func sanitizeDNSQname(qname string) (string, bool) {
+	if len(qname) < minValidHostLength || len(qname) > maxHostLength {
+		return "", false
+	}
+
+	lowered := strings.ToLower(qname)
+
+	for label := range strings.SplitSeq(lowered, ".") {
+		if !isValidDNSQnameLabel(label) {
+			return "", false
+		}
+	}
+
+	return lowered, true
+}
+
+// isValidDNSQnameLabel validates a single label of a DNS query name.
+func isValidDNSQnameLabel(label string) bool {
+	if len(label) < 1 || len(label) > maxLabelLength {
+		return false
+	}
+
+	if label[0] == '-' || label[len(label)-1] == '-' {
+		return false
+	}
+
+	for _, r := range label {
+		if !isValidDNSChar(r) && r != '_' {
+			return false
+		}
+	}
+
+	return true
+}
+
 // isValidDNSChar returns true if the rune is a valid DNS character (a-z, 0-9, dot, hyphen).
 func isValidDNSChar(r rune) bool {
 	return (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '.' || r == '-'

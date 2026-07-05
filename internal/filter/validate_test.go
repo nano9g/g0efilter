@@ -233,3 +233,37 @@ func BenchmarkSanitizeHostWithLogger(b *testing.B) {
 		})
 	}
 }
+
+func TestSanitizeDNSQname(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		qname string
+		want  string
+		ok    bool
+	}{
+		{"plain name", "github.com", "github.com", true},
+		{"lowercased", "GitHub.COM", "github.com", true},
+		{"underscore service label", "_dmarc.example.com", "_dmarc.example.com", true},
+		{"srv-style name", "_ldap._tcp.example.com", "_ldap._tcp.example.com", true},
+		{"single label", "localhost", "localhost", true},
+		{"reverse lookup", "5.0.18.172.in-addr.arpa", "5.0.18.172.in-addr.arpa", true},
+		{"empty", "", "", false},
+		{"space", "bad name.example.com", "", false},
+		{"empty label", "bad..example.com", "", false},
+		{"label starts with hyphen", "-bad.example.com", "", false},
+		{"too long", domain254Chars, "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, ok := sanitizeDNSQname(tt.qname)
+			if got != tt.want || ok != tt.ok {
+				t.Errorf("sanitizeDNSQname(%q) = (%q, %v), want (%q, %v)", tt.qname, got, ok, tt.want, tt.ok)
+			}
+		})
+	}
+}

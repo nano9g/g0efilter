@@ -740,3 +740,26 @@ func TestMarkedDialer(t *testing.T) {
 		t.Errorf("Expected timeout %v, got %v", expectedTimeout, dialer.Timeout)
 	}
 }
+
+//nolint:exhaustruct
+func TestHandleRefusesInvalidQname(t *testing.T) {
+	t.Parallel()
+
+	// Under default-allow an invalid qname must be refused, not treated as an
+	// empty host that would sail past the denylist and hardening checks.
+	handler := createDNSHandler(nil, Options{DefaultAllow: true, DNSHardening: true})
+
+	msg := &dns.Msg{}
+	msg.SetQuestion("bad name.example.com.", dns.TypeA)
+
+	mockWriter := &mockDNSResponseWriter{responses: make([]*dns.Msg, 0)}
+	handler.handle(mockWriter, msg)
+
+	if len(mockWriter.responses) != 1 {
+		t.Fatalf("expected one response, got %d", len(mockWriter.responses))
+	}
+
+	if rcode := mockWriter.responses[0].Rcode; rcode != dns.RcodeRefused {
+		t.Errorf("Rcode = %d, want REFUSED (%d)", rcode, dns.RcodeRefused)
+	}
+}

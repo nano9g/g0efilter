@@ -117,3 +117,18 @@ func TestReportResolvedIPsNilHookAndEmptyAnswer(t *testing.T) {
 		t.Error("OnResolved must not fire when the answer has no A/AAAA records")
 	}
 }
+
+func TestExtractAnswerIPsZeroTTL(t *testing.T) {
+	t.Parallel()
+
+	msg := new(dns.Msg)
+	msg.Answer = []dns.RR{
+		answerA("x.example.com.", "192.0.2.1", 0),
+		answerA("x.example.com.", "192.0.2.2", 300),
+	}
+
+	_, ttl := extractAnswerIPs(msg)
+	if ttl != 0 {
+		t.Errorf("ttl = %d, want 0 (a TTL=0 record must not be overridden by a later, larger TTL)", ttl)
+	}
+}

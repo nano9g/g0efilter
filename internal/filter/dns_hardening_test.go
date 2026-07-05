@@ -2,6 +2,7 @@
 package filter
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -124,6 +125,26 @@ func TestDNSRateLimiter(t *testing.T) {
 
 	if !l.allow("10.0.0.1") {
 		t.Error("tokens must refill over time")
+	}
+}
+
+func TestDNSRateLimiterBoundedUnderSourceFlood(t *testing.T) {
+	t.Parallel()
+
+	l := newDNSRateLimiter()
+	now := time.Now()
+	l.now = func() time.Time { return now }
+
+	// A flood of always-fresh spoofed sources: idle pruning never applies, so
+	// the hard cap must bound the bucket map.
+	for i := range rateLimiterMaxSources * 2 {
+		l.allow("src-" + strconv.Itoa(i))
+
+		now = now.Add(time.Millisecond)
+	}
+
+	if len(l.buckets) > rateLimiterMaxSources {
+		t.Errorf("buckets = %d, want <= %d", len(l.buckets), rateLimiterMaxSources)
 	}
 }
 
