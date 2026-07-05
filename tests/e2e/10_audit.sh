@@ -16,7 +16,9 @@ stack_up ENFORCE=audit
 wait_ready
 
 log "[Audit] Filter chain must fail open (no policy drop)"
-if $COMPOSE exec g0efilter nft list table ip g0efilter_v4 | grep -q "policy drop"; then
+RULESET=$($COMPOSE exec g0efilter nft list table ip g0efilter_v4) \
+  || fail "could not list g0efilter_v4 nft table"
+if echo "$RULESET" | grep -q "policy drop"; then
   fail "audit mode ruleset still contains policy drop"
 fi
 log "OK: kernel chains fail open"
