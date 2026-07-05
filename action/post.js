@@ -100,8 +100,30 @@ function buildSummary(raw) {
   return md;
 }
 
+// Rules live in the host netns; a leftover container or ruleset would brick the
+// runner's DNS/egress after the job. Best-effort - never fail the post step.
+function teardown() {
+  try {
+    execSync("docker rm -f g0efilter", { stdio: "ignore" });
+  } catch {}
+
+  for (const table of [
+    "ip g0efilter_v4",
+    "ip g0efilter_nat_v4",
+    "ip6 g0efilter_v6",
+    "ip6 g0efilter_nat_v6",
+  ]) {
+    try {
+      execSync(`sudo nft delete table ${table}`, { stdio: "ignore" });
+    } catch {} // table absent, or no sudo on self-hosted runners
+  }
+}
+
 function main() {
   const summary = buildSummary(containerLogs());
+
+  teardown();
+
   if (process.env.GITHUB_STEP_SUMMARY) {
     fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary + "\n");
   } else {
