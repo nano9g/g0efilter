@@ -39,6 +39,10 @@ BASE_DOMAINS=(
   "api.github.com"
   "*.actions.githubusercontent.com"
 
+  # GitHub-hosted runner control plane (hosted-compute watchdog/orchestrator);
+  # blocking these can get the runner VM reaped mid-job
+  "*.githubapp.com"
+
   # Downloading actions
   "codeload.github.com"
 
@@ -106,9 +110,10 @@ DOCKER_ARGS=(
 
 docker run "${DOCKER_ARGS[@]}" "$IMAGE"
 
-echo "Waiting for policy to be applied..."
+echo "Waiting for the filter to become ready..."
 for _ in $(seq 1 60); do
-  if docker logs g0efilter 2>&1 | grep -q "policy.applied"; then
+  # startup.ready covers all released versions; policy.applied is the reload marker
+  if docker logs g0efilter 2>&1 | grep -qE "startup\.ready|policy\.applied"; then
     echo "g0efilter is active - egress is now filtered ($POLICY mode)"
     exit 0
   fi
