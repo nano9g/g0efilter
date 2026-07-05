@@ -66,7 +66,12 @@ function collectDecisions(raw) {
 }
 
 function escapeCell(v) {
-  return String(v).replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+  return String(v)
+    .replace(/&/g, "&amp;")
+    .replace(/\|/g, "&#124;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/[\r\n]+/g, " ");
 }
 
 function buildSummary(raw) {
