@@ -1,7 +1,7 @@
 /* --- state --- */
 var LIVE = JSON.parse(localStorage.getItem('autoRefresh') || 'true');
 var VIEW = localStorage.getItem('view') || 'stream';
-var MAX_ROWS = 5000; // fallback — overwritten by /api/v1/config on init (mirrors BUFFER_SIZE env var)
+var MAX_ROWS = 5000; // fallback - overwritten by /api/v1/config on init (mirrors BUFFER_SIZE env var)
 var pendingUnblocks = new Set(); // Track value\0target_hostname keys with pending unblock requests
 var completedUnblocks = new Set(); // Track value\0target_hostname keys that have been unblocked
 
@@ -111,7 +111,7 @@ function matches(it){
 /* --- stream --- */
 var allItems=[];
 
-/* filter cache — updated once per render pass instead of re-reading DOM on every row */
+/* filter cache - updated once per render pass instead of re-reading DOM on every row */
 var filterAction='';
 var filterComp='';
 var filterQuery='';
@@ -160,7 +160,7 @@ function unblockDomain(domain, sourceHostname) {
 }
 
 function unblockIP(ip, sourceHostname) {
-  // Strip port if present — only for IPv4 (e.g. "1.2.3.4:80").
+  // Strip port if present - only for IPv4 (e.g. "1.2.3.4:80").
   // IPv6 addresses are passed without a port suffix; bracketed form "[::1]:80" is also handled.
   var cleanIP = ip;
   if (ip.charAt(0) === '[') {
@@ -190,9 +190,9 @@ window.unblockIP = unblockIP;
 // and are then interpreted safely by the JS engine.
 function jsStringEsc(value) {
   return String(value == null ? '' : value)
-    .replace(/\\/g, '\\x5C')   // backslash — must come first
-    .replace(/'/g, '\\x27')    // single quote — JS string delimiter
-    .replace(/"/g, '\\x22')    // double quote — HTML attribute delimiter
+    .replace(/\\/g, '\\x5C')   // backslash - must come first
+    .replace(/'/g, '\\x27')    // single quote - JS string delimiter
+    .replace(/"/g, '\\x22')    // double quote - HTML attribute delimiter
     .replace(/</g, '\\x3C')    // prevent tag injection
     .replace(/>/g, '\\x3E')
     .replace(/&/g, '\\x26')    // prevent entity injection
@@ -225,7 +225,7 @@ function rowHTML(it){
   // Unblock button for blocked items - pass source hostname as default target
   // Show status: Unblocked (green) > Pending (yellow) > Unblock button
   var unblockBtn = '';
-  if (act === 'BLOCKED') {
+  if (act === 'BLOCKED' || act === 'AUDIT') {
     var escapedHn = jsStringEsc(hn);
     if (host) {
       if (isUnblocked(completedUnblocks, host, hn)) {
@@ -294,7 +294,7 @@ function renderAgg(){
     var t=new Date(it.time||it.ts||Date.now()).getTime();
     if(t>rec.lastSeen) rec.lastSeen=t;
     var action=getAction(it);
-    if(action==='ALLOWED') rec.allowed++; else if(action==='BLOCKED') rec.blocked++;
+    if(action==='ALLOWED') rec.allowed++; else if(action==='BLOCKED'||action==='AUDIT') rec.blocked++;
   }
 
   var rows=[];

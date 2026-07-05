@@ -2,6 +2,7 @@
 package nftables
 
 import (
+	"bytes"
 	"context"
 	"log/slog"
 	"net"
@@ -1037,6 +1038,31 @@ func slicesEqualOrBothNil(a, b []string) bool {
 	}
 
 	return true
+}
+
+// BLOCKED nflog events log at WARN so they survive LOG_LEVEL=WARN.
+//
+//nolint:exhaustruct
+func TestProcessActionEventLevels(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	pkt := PacketInfo{Src: "10.0.0.1:1234", Dst: "1.2.3.4:443", Protocol: "TCP"}
+
+	processActionEvent(logger, "BLOCKED", "flow-1", pkt, 64)
+
+	if !strings.Contains(buf.String(), `"level":"WARN"`) {
+		t.Errorf("BLOCKED nflog event must log at WARN, got: %s", buf.String())
+	}
+
+	buf.Reset()
+	processActionEvent(logger, "ALLOWED", "flow-2", pkt, 64)
+
+	if buf.Len() != 0 {
+		t.Errorf("ALLOWED nflog event must stay at DEBUG (filtered at INFO), got: %s", buf.String())
+	}
 }
 
 func TestProcessActionEvent(t *testing.T) {

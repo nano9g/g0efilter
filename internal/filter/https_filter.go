@@ -22,6 +22,8 @@ func Serve443(ctx context.Context, allowlist []string, opts Options) error {
 		opts.ListenAddr = ":8443"
 	}
 
+	opts.Denylist = NormalizePatterns(opts.Denylist)
+
 	return serveTCP(ctx, opts.ListenAddr, opts.Logger, handle, NormalizePatterns(allowlist), opts, "https")
 }
 
@@ -37,25 +39,32 @@ func handle(conn net.Conn, allowlist []string, opts Options) error {
 	// 1) Extract SNI from ClientHello
 	sni, buf := extractSNIFromConnection(conn, opts)
 
-	// 2) Check if SNI is blocked
-	allowed := allowedHost(sni, allowlist)
+	// 2) Apply policy
+	permitted := hostPermitted(sni, allowlist, opts)
 	if opts.Logger != nil {
-		opts.Logger.Debug("https.allowlist_check", "sni", sni, "allowed", allowed)
+		opts.Logger.Debug("https.allowlist_check", "sni", sni, "allowed", permitted)
 	}
 
-	if sni == "" || !allowed {
+	wasAudited := audited(permitted, opts)
+
+	if wasAudited {
+		logAuditedHTTPS(conn, tc, sni, opts)
+	} else if !permitted {
 		handleBlockedHTTPS(conn, tc, sni, opts)
 
 		return nil
 	}
 
-	// 3) Handle allowed HTTPS connection
-	return handleAllowedHTTPS(conn, tc, buf, sni, opts)
+	maybeLearnHost(sni, allowlist, opts)
+
+	// 3) Handle allowed HTTPS connection (audited flows already logged their verdict)
+	return handleAllowedHTTPS(conn, tc, buf, sni, opts, !wasAudited)
 }
 
 // extractSNIFromConnection extracts SNI from TLS ClientHello.
 func extractSNIFromConnection(conn net.Conn, opts Options) (string, *bytes.Buffer) {
 	_ = conn.SetReadDeadline(time.Now().Add(connectionReadTimeout))
+	defer func() { _ = conn.SetReadDeadline(time.Time{}) }()
 
 	ch, buf, err := peekClientHello(conn)
 	if err != nil {
@@ -66,12 +75,11 @@ func extractSNIFromConnection(conn net.Conn, opts Options) (string, *bytes.Buffe
 			)
 		}
 
-		// Return empty SNI so handle() falls through to
-		// handleBlockedHTTPS, which recovers originalDst and logs destination_ip.
-		return "", nil
+		// Return empty SNI with whatever bytes were consumed: under default-deny
+		// handle() falls through to handleBlockedHTTPS, under default-allow or
+		// learning mode the buffered bytes let the connection still be forwarded.
+		return "", buf
 	}
-
-	_ = conn.SetReadDeadline(time.Time{})
 
 	sni := strings.TrimSuffix(strings.ToLower(ch.ServerName), ".")
 
@@ -122,7 +130,22 @@ func handleBlockedHTTPS(conn net.Conn, tc *net.TCPConn, sni string, opts Options
 
 // logBlockedHTTPS logs blocked HTTPS attempts.
 func logBlockedHTTPS(conn net.Conn, tc *net.TCPConn, sni string, opts Options) {
+	reason, destIP, destPort := httpsViolationContext(conn, tc, sni, opts)
+	logBlockedConnection(opts, componentHTTPS, reason, sni, conn, destIP, destPort)
+}
+
+// logAuditedHTTPS logs a would-be-blocked HTTPS attempt that audit mode lets through.
+func logAuditedHTTPS(conn net.Conn, tc *net.TCPConn, sni string, opts Options) {
+	reason, destIP, destPort := httpsViolationContext(conn, tc, sni, opts)
+	logAuditedConnection(opts, componentHTTPS, reason, sni, conn, destIP, destPort)
+}
+
+func httpsViolationContext(conn net.Conn, tc *net.TCPConn, sni string, opts Options) (string, string, int) {
 	reason := "not-allowlisted"
+	if opts.DefaultAllow {
+		reason = "denylisted"
+	}
+
 	if sni == "" {
 		reason = "no-sni"
 	}
@@ -150,11 +173,14 @@ func logBlockedHTTPS(conn net.Conn, tc *net.TCPConn, sni string, opts Options) {
 		)
 	}
 
-	logBlockedConnection(opts, componentHTTPS, reason, sni, conn, destIP, destPort)
+	return reason, destIP, destPort
 }
 
-// handleAllowedHTTPS handles allowed HTTPS connections.
-func handleAllowedHTTPS(conn net.Conn, tc *net.TCPConn, buf *bytes.Buffer, sni string, opts Options) error {
+// handleAllowedHTTPS handles allowed HTTPS connections. logAllowed is false for
+// audited flows, which already logged their AUDIT verdict.
+func handleAllowedHTTPS(
+	conn net.Conn, tc *net.TCPConn, buf *bytes.Buffer, sni string, opts Options, logAllowed bool,
+) error {
 	// Recover original destination
 	target, err := originalDstTCP(tc)
 	if err != nil {
@@ -165,8 +191,14 @@ func handleAllowedHTTPS(conn net.Conn, tc *net.TCPConn, buf *bytes.Buffer, sni s
 		return err
 	}
 
+	// No SNI to learn from - record the destination IP instead
+	if sni == "" {
+		destIP, _ := parseHostPort(target)
+		maybeLearnIP(destIP, opts)
+	}
+
 	// Log allowed connection
-	if opts.Logger != nil {
+	if opts.Logger != nil && logAllowed {
 		logAllowedConnection(opts, componentHTTPS, target, sni, conn)
 	}
 
@@ -222,12 +254,13 @@ func (c roConn) SetReadDeadline(time.Time) error  { return nil }
 func (c roConn) SetWriteDeadline(time.Time) error { return nil }
 
 // peekClientHello extracts TLS ClientHello info while preserving the data.
+// The buffer is returned even on error so consumed bytes can still be forwarded.
 func peekClientHello(reader io.Reader) (*tls.ClientHelloInfo, *bytes.Buffer, error) {
 	buf := new(bytes.Buffer)
 
 	hello, err := readClientHello(io.TeeReader(reader, buf))
 	if err != nil {
-		return nil, nil, err
+		return nil, buf, err
 	}
 
 	return hello, buf, nil

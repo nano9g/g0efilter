@@ -21,6 +21,7 @@ import (
 
 	"github.com/g0lab/g0efilter/internal/actions"
 	"github.com/g0lab/g0efilter/internal/alerting"
+	"github.com/g0lab/g0efilter/internal/netutil"
 	"github.com/g0lab/g0efilter/internal/safeio"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -147,6 +148,8 @@ func newPosterWithCtx(ctx context.Context, url, apiKey string, zl zerolog.Logger
 	}
 
 	tr := &http.Transport{
+		// SO_MARK bypass so shipping to the dashboard is not itself filtered
+		DialContext:           netutil.MarkedDialer(defaultHTTPClientTimeout).DialContext,
 		MaxIdleConns:          100,
 		MaxIdleConnsPerHost:   100,
 		IdleConnTimeout:       defaultIdleConnTimeout,
@@ -477,8 +480,9 @@ type zerologHandler struct {
 }
 
 func (z *zerologHandler) Enabled(_ context.Context, l slog.Level) bool {
-	// Short-circuit terminal logs below threshold, but still handle records if poster is configured
-	return l >= z.termLevel || z.poster != nil
+	// Short-circuit terminal logs below threshold, but still handle records when a
+	// dashboard poster or notifier needs them regardless of terminal log level
+	return l >= z.termLevel || z.poster != nil || z.notifier != nil
 }
 
 func toZerologLevel(l slog.Level) zerolog.Level {
@@ -575,9 +579,9 @@ func logToTerminal(zl zerolog.Logger, level slog.Level, msg string, attrs map[st
 
 // shouldShipToDashboard determines if an event should be sent to the dashboard.
 func shouldShipToDashboard(act string, attrs map[string]any) bool {
-	// Only ship BLOCKED and ALLOWED actions
+	// Only ship BLOCKED, ALLOWED and AUDIT actions
 	// REDIRECTED stays in console logs only (debug level)
-	if act != actions.ActionBlocked && act != actions.ActionAllowed {
+	if act != actions.ActionBlocked && act != actions.ActionAllowed && act != actions.ActionAudit {
 		return false
 	}
 

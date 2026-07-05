@@ -1,7 +1,6 @@
 [![docker pulls](https://img.shields.io/docker/pulls/g0lab/g0efilter.svg?label=docker%20pulls)](https://hub.docker.com/r/g0lab/g0efilter)
 [![g0efilter CI](https://github.com/g0lab/g0efilter/actions/workflows/ci.yaml/badge.svg)](https://github.com/g0lab/g0efilter/actions/workflows/ci.yaml)
 [![g0efilter Tests](https://github.com/g0lab/g0efilter/actions/workflows/test.yaml/badge.svg)](https://github.com/g0lab/g0efilter/actions/workflows/test.yaml)
-[![Go Report Card](https://goreportcard.com/badge/g0lab/g0efilter)](https://goreportcard.com/report/g0lab/g0efilter)
 [![codecov](https://codecov.io/gh/g0lab/g0efilter/graph/badge.svg?token=owO27TfE79)](https://codecov.io/gh/g0lab/g0efilter)
 
 > [!NOTE]
@@ -10,171 +9,254 @@
 > [!WARNING]
 > g0efilter is in active development and its configuration may change often.
 
-g0efilter is a lightweight container designed to filter outbound (egress) traffic from attached container workloads. Run g0efilter alongside your workloads and attach them to share its network namespace to enforce a simple IP and domain allowlist policy.
-
-### Background
-
-As a self-hoster running many open source apps, I wanted an easy way to restrict outbound connections from containers, since not all can be trusted. While Docker supports internal-only networks, some containers still need selective network and internet access. The goal was to support wildcard subdomains (for example, *.example.com) without terminating TLS connections or relying solely on IP allowlisting, as CDNs often use multiple, changing IPs across many subdomains. This can be done with third-party firewall products, but the aim here is an open source, lightweight filter that runs alongside Docker Compose workloads...so here we are.
+g0efilter is a lightweight container that filters outbound (egress) traffic from attached container workloads. Run it alongside your workloads, attach them with `network_mode: "service:g0efilter"`, and enforce an IP and domain policy without terminating TLS.
 
 ### Features
 
-- **Egress filtering** - Explicitly allow specified IPs/CIDRs and domains in a policy file; anything not on the allowlist is blocked
-- **Wildcard subdomain support** - Allow wildcard subdomains like `*.example.com` to match any subdomain level
-- **Two filtering modes** - HTTPS (TLS SNI/HTTP Host inspection) or DNS-based filtering
-- **Live policy reloading** - Update policy.yaml without restarting containers
-- **Real-time dashboard** - Web UI with SSE streaming for traffic monitoring
-- **Remote unblock** - Unblock domains/IPs from the dashboard UI (with auth middleware)
-- **Notifications** - Gotify alerts for blocked traffic events
+- **Egress filtering** by IP/CIDR and domain, default-deny with an allowlist
+- **Flexible domain patterns**: exact names, wildcards anywhere (`*.example.com`, `bucket.*.r2.example.com`), and regex (`/^cache-[0-9]+\.example\.com$/`)
+- **Three filter modes**: `https` (SNI/Host inspection), `dns` (resolution filtering), `dns-strict` (resolution filtering plus kernel connection-time enforcement)
+- **Default-allow (denylist) mode**: allow everything except listed domains/IPs
+- **Learning mode**: observe without blocking and auto-build the allowlist
+- **Audit mode**: dry-run a policy; would-be blocks are logged, nothing breaks
+- **Process attribution**: flow logs can carry the owning PID/command (opt-in)
+- **Live policy reloading**, real-time dashboard, remote unblock, Gotify notifications
 
-### Quick Start
+### Quick start
 
-Refer to the [examples](https://github.com/g0lab/g0efilter/tree/main/examples).
+See [examples](https://github.com/g0lab/g0efilter/tree/main/examples) for ready-to-run compose files and policies.
 
 ### How it works
 
-Attach containers to g0efilter by setting `network_mode: "service:g0efilter"` in Docker Compose, which shares g0efilter's network namespace (network stack) with those containers. Traffic from attached containers is filtered based on a policy file that defines allowlisted IPs/CIDRs and domains.
+Attached containers share g0efilter's network namespace. Traffic to allowlisted IPs/CIDRs passes through directly; everything else is handled by the selected `FILTER_MODE`:
 
-**Traffic to allowlisted IPs/CIDRs** bypasses all filtering and passes through directly.
+<details>
+<summary><b>https mode (default): TLS SNI / HTTP Host inspection</b></summary>
 
-**Traffic to other IPs** is subject to domain-level filtering based on the `FILTER_MODE` environment variable (`https` or `dns`):
+Outbound traffic on ports 80/443 is redirected by nftables to local proxy services inside g0efilter. The proxies read the HTTP `Host` header (port 80) or the TLS SNI from the ClientHello (port 443, without terminating TLS) and check it against the policy. Allowed connections are spliced through to the original destination at kernel speed; blocked connections are reset. Traffic on other ports is dropped unless the destination IP is allowlisted.
 
-- **HTTPS mode (default):** Outbound HTTP/HTTPS traffic on ports 80/443 is intercepted and redirected to local services running inside g0efilter. These services inspect plain text packet data, including the HTTP `Host` header (for HTTP) or TLS SNI from the TLS Client Hello (for HTTPS, without terminating the connection), and cross-reference it against the allowlist. If the domain is allowed, the connection is established and traffic flows through (the service acts as a middleman). If not found in the allowlist, the connection is reset and traffic is blocked.
-
-- **DNS mode:** DNS queries are intercepted and redirected to an internal DNS server. The server only resolves allowlisted domains and non-allowlisted queries receive NXDOMAIN responses. Note that direct IP connections bypass DNS filtering entirely.
-
-**Filter Logic Flow (HTTPS mode):**
-```
+```text
 Start
-│
-├─► Is destination IP in allowlist? ── Yes ─► ALLOW (skip remaining steps, no redirect)
-│                                   └─ No ─► continue
-│ 
-├─► Is connection already established? ── Yes ─► ALLOW (skip remaining steps, no redirect)
-│                                      └─ No ─► continue
-│ 
-├─► Is destination port 80 or 443? ── No ─► BLOCK
-│                                  └─ Yes ─► continue
-│
-├─► Redirect to local filter service (port 8080 for HTTP, 8443 for HTTPS)
-│
-├─► Extract domain from Host header (HTTP) or SNI (TLS)
-│
-├─► Does domain match allowlist? ── Yes ─► FORWARD to original destination
-│                                └─ No ─► DROP
-│
-└─► LOG decision → Send to dashboard (if enabled) ─► End
+|
++- Destination IP in allowlist? -- Yes -> ALLOW (no redirect)
+|
++- Connection already established? -- Yes -> ALLOW
+|
++- Destination port 80/443? -- No -> BLOCK
+|
++- Redirect to local proxy, extract Host header / SNI
+|
++- Domain matches policy? -- Yes -> FORWARD to original destination
+|                          -- No  -> DROP (connection reset)
+|
++- LOG decision -> dashboard (if enabled)
 ```
+
+Strengths: precise per-connection domain checks, works with CDNs and changing IPs.
+Limits: domain filtering applies to ports 80/443 only; a client that sends no SNI is blocked (default-deny).
+
+</details>
+
+<details>
+<summary><b>dns mode: resolution filtering</b></summary>
+
+All DNS (UDP/TCP port 53) is redirected to an internal DNS proxy. Allowed domains resolve normally through the upstream resolver; non-allowlisted A/AAAA queries are sinkholed to 0.0.0.0/:: and other blocked query types get NXDOMAIN.
+
+Strengths: covers every protocol and port, cheapest data path (no proxying of the traffic itself).
+Limits: enforcement happens at resolution only. A process that connects to a hardcoded IP, uses DNS-over-HTTPS, or replays a cached answer bypasses filtering entirely. Use `dns-strict` to close that gap.
+
+</details>
+
+<details>
+<summary><b>dns-strict mode: resolution filtering plus connection-time enforcement</b></summary>
+
+Everything dns mode does, plus: when an allowed domain resolves, the proxy pushes the answer's A/AAAA addresses into a kernel nftables set with a TTL-bounded timeout (60s floor, 24h cap), before the client sees the answer. The filter chain is default-drop, so connections to any IP that was never resolved through the proxy (hardcoded IPs, DoH, cached answers) are dropped.
+
+- Enforcement covers all ports and both IPv4/IPv6, entirely in the kernel
+- Entries expire with the DNS TTL; established connections survive expiry via conntrack
+- Resolved entries are flushed on policy reload and repopulate on the next resolution
+- Requires `default_action: deny`; under default-allow or learning mode it degrades to plain dns mode with a warning
+
+</details>
 
 > [!NOTE]
-> Attached containers share g0efilter's network namespace and must not bind to ports used by g0efilter.  
-> By default, g0efilter uses `HTTP_PORT` (8080), `HTTPS_PORT` (8443), and optionally `DNS_PORT` (53).
+> Attached containers must not bind to ports used by g0efilter: `HTTP_PORT` (8080), `HTTPS_PORT` (8443), and `DNS_PORT` (53) in dns modes.
 
-### Dashboard container
-
-The optional **g0efilter-dashboard** container runs a web UI on **port 8081** (by default). If `DASHBOARD_HOST` and `DASHBOARD_API_KEY` are set, g0efilter will ship logs to the dashboard.
-
-Example Dashboard Screenshot:
-
-![g0efilter-dashboard-example](https://raw.githubusercontent.com/g0lab/g0efilter/main/examples/images/g0efilter-dashboard-example.png)
-
-### Example policy.yaml
+### Policy
 
 ```yaml
 allowlist:
   ips:
     - "1.1.1.1"
     - "192.168.0.0/16"
-    - "10.1.1.1"
   domains:
-    - "github.com"
-    - "*.alpinelinux.org"
+    - "github.com"                                 # exact
+    - "*.alpinelinux.org"                          # wildcard, any subdomain level
+    - "bucket.*.r2.cloudflarestorage.com"          # wildcard works mid-name too
+    - '/^cache-[0-9]+\.example\.com$/'             # regex (single-quote it in YAML)
 ```
 
+Each `*` matches one or more characters including dots. Regex entries are slash-delimited, matched case-insensitively against the whole hostname (anchoring is automatic), and compiled with Go's linear-time RE2 engine. Ready-made example policies live in [examples/policy/](https://github.com/g0lab/g0efilter/tree/main/examples/policy).
+
+The policy file live-reloads: edits apply without restarting the container. Mount the policy *directory*, not the single file, or editors that use atomic save will silently break reloads:
+
+```yaml
+volumes:
+  - ./policy/:/app/policy/   # correct
+# NOT: - ./policy.yaml:/app/policy.yaml
+```
+
+Environment variables (`ALLOWLIST_IPS`, `ALLOWLIST_DOMAINS`, ...) can replace the policy file and take precedence when set.
+
+### Default-allow (denylist) mode
+
+Set `default_action: allow` in the policy file to invert the model: traffic passes unless it matches the `denylist`. Useful for containers that need broad internet access but should be kept away from analytics/telemetry endpoints or the LAN. An explicit allowlist match always overrides the denylist.
+
+```yaml
+default_action: allow
+allowlist:
+  domains:
+    - "api.github.com"        # explicitly allow this host even though *.github.com is denylisted
+denylist:
+  ips:
+    - "192.168.0.0/16"        # block LAN access
+  domains:
+    - "*.github.com"          # deny broad GitHub subdomains
+    - "*.doubleclick.net"
+    - "telemetry.example.com"
+```
+
+Because `default_action` lives in the policy file, flipping it is a live-reload edit. When it is `deny` (the default), the denylist is ignored.
+
+### Learning mode
+
+`LEARNING_MODE=true` runs g0efilter observe-only: nothing is blocked and every domain (or destination IP when no SNI/Host is present) not already covered is appended to the policy file. Run it for a representative period, prune the result, then switch back to enforcement.
+
+### Audit mode
+
+`ENFORCE=audit` is a dry run for an existing policy: would-be-blocked traffic is allowed through and logged with the `AUDIT` action (visible in the dashboard), so you can preview a policy's impact before enforcing it. Unlike learning mode, nothing is written to the policy file.
+
+### Process attribution
+
+`PROCESS_INFO=true` enriches flow logs with the owning process (`pid`, `process_name`, `cmdline`, `executable`), resolved via `/proc` and cached per flow. This requires g0efilter to share a PID namespace with the client processes (host deploy, `pid: host`, or `shareProcessNamespace: true`); in a plain network-only sidecar the fields degrade to `process_name=unknown`.
+
+### GitHub Actions (CI egress filtering)
+
+g0efilter can filter egress from GitHub Actions runners. The action starts the g0efilter container with host networking, so all traffic from the job (and later steps) is inspected, and adds a report of blocked/audited connections to the job summary.
+
+```yaml
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Filter egress
+        uses: g0lab/g0efilter@main
+        with:
+          egress-policy: block   # or 'audit' to log without blocking
+          allowed-domains: |
+            *.npmjs.org
+            registry.npmjs.org
+
+      - uses: actions/checkout@v7
+      # ... the rest of the job runs behind the filter
+```
+
+| Input | Description | Default |
+|-------|-------------|---------|
+| `allowed-domains` | Newline-separated domains (wildcards and regex supported) | |
+| `allowed-ips` | Newline-separated IPs/CIDRs | |
+| `egress-policy` | `block` or `audit` | `block` |
+| `mode` | `https` (SNI/Host inspection) or `dns` | `https` |
+| `log-level` | g0efilter log level | `INFO` |
+| `image` | Container image to run | matches the action's release tag, or `:latest` for branch refs |
+
+GitHub's [documented runner communication domains](https://docs.github.com/actions/reference/runners/self-hosted-runners) (`github.com`, `api.github.com`, `*.actions.githubusercontent.com`, `codeload.github.com`, artifact/log storage, release downloads) and the runner's DNS resolvers are always allowed so the workflow itself keeps working. Package registries are **not** in the baseline - if a step pulls containers or packages, add the registry (`ghcr.io`, `*.pkg.github.com`, `registry.npmjs.org`, ...) to `allowed-domains`.
+
 > [!NOTE]
-> - The policy file supports live reloading: edits to policy.yaml automatically trigger rule and service updates without needing to restart the container. The internal g0efilter services are restarted, but the container itself remains running.
->   **Important:** Mount a *directory* rather than a single file so live reload works with all editors.
->   ```yaml
->   volumes:
->     - ./policy/:/app/policy/   # correct: directory mount
->   # NOT: - ./policy.yaml:/app/policy.yaml  # broken with vim/emacs/most editors
->   ```
->   Editors that use atomic save (write temp file + rename) create a new inode on the host. A single-file Docker bind mount is pinned to the original inode and never reflects the new content, so no reload fires. Mounting the parent directory avoids this because the path is resolved at open-time, always reaching the current inode.
-> - If you do not need live reloading, you can use environment variables (ALLOWLIST_IPS, ALLOWLIST_DOMAINS) instead of a policy file. If both are present, environment variables take precedence.
+> Limitations: GitHub-hosted Ubuntu runners only. Traffic from Docker containers started by later steps is filtered only when they use `--network host`; jobs that run inside a container (`container:`) are not supported. `egress-policy: audit` requires a g0efilter release with audit mode (newer than v0.5.13) - on older images it enforces `block`.
+
+### Dashboard
+
+The optional **g0efilter-dashboard** container serves a web UI on port 8081. Set `DASHBOARD_HOST` and `DASHBOARD_API_KEY` on g0efilter to ship logs to it.
+
+![g0efilter-dashboard-example](https://raw.githubusercontent.com/g0lab/g0efilter/main/examples/images/g0efilter-dashboard-example.png)
 
 ### Environment variables
 
-### g0efilter
+#### g0efilter
 
-| Variable            | Description                                        | Default             |
-| ------------------- | -------------------------------------------------- | ------------------- |
-| `LOG_LEVEL`         | Log level (TRACE, DEBUG, INFO, WARN, ERROR)        | `INFO`              |
-| `HOSTNAME`          | To identify which endpoint is sending the logs     | unset               |
-| `HTTP_PORT`         | Local HTTP port                                    | `8080`              |
-| `HTTPS_PORT`        | Local HTTPS port                                   | `8443`              |
-| `POLICY_PATH`       | Path to policy file inside container               | `/app/policy.yaml`  |
-| `ALLOWLIST_IPS`     | Comma-separated list of allowed IPs/CIDRs (takes precedence over policy file) | unset               |
-| `ALLOWLIST_DOMAINS` | Comma-separated list of allowed domains (takes precedence over policy file, supports wildcards like `*.example.com`) | unset               |
-| `FILTER_MODE`       | `https` (TLS SNI/HTTP Host) or `dns` (DNS name filtering)      | `https`             |
-| `DNS_PORT`          | DNS listen port                                    | `53`                |
-| `DNS_UPSTREAMS`     | Upstream DNS servers (comma-separated). Uses Docker's default DNS if not specified | `127.0.0.11:53`     |
-| `DASHBOARD_HOST`    | Dashboard URL for log shipping                     | unset               |
-| `DASHBOARD_API_KEY` | API key for dashboard authentication. Must match `API_KEY` set on the dashboard              | unset               |
-| `DASHBOARD_QUEUE_SIZE` | Queue size for buffering logs before sending to dashboard. Logs are dropped if queue is full | `1024` |
-| `DASHBOARD_START_DELAY` | Delay before starting dashboard log shipping (supports duration formats like `5s`, `1m`) | `5s` |
-| `LOG_FILE`          | Optional path for persistent log file              | unset               |
-| `NFLOG_BUFSIZE`     | Netfilter log buffer size                          | `96`                |
-| `NFLOG_QTHRESH`     | Netfilter log queue threshold                      | `50`                |
-| `NOTIFICATION_HOST`            | Gotify server URL for security alert notifications | unset               |
-| `NOTIFICATION_KEY`             | Gotify application key for authentication          | unset               |
-| `NOTIFICATION_BACKOFF_SECONDS` | Rate limit backoff period for duplicate alerts (in seconds) | `60`                |
-| `NOTIFICATION_IGNORE_DOMAINS`  | Comma-separated list of domains to ignore for notifications (supports wildcards like `*.example.com`) | unset               |
-| `ENABLE_REMOTE_UNBLOCK` | Enable polling dashboard for remote unblock requests | `false` |
-| `UNBLOCK_POLL_INTERVAL` | How often to poll dashboard for unblock requests (supports duration formats like `10s`, `1m`) | `10s` |
+| Variable | Description | Default |
+| --- | --- | --- |
+| `FILTER_MODE` | `https`, `dns`, or `dns-strict` | `https` |
+| `POLICY_PATH` | Path to policy file inside container. When unset, `/app/policy.yaml` is used if present, then `/app/policy/policy.yaml` (the directory-mount convention). The file is never auto-created. | `/app/policy.yaml` |
+| `DEFAULT_ACTION` | `deny` (allowlist) or `allow` (denylist). Policy file `default_action` wins when set | `deny` |
+| `ENFORCE` | `block` or `audit` (dry-run: log would-be blocks, allow traffic) | `block` |
+| `LEARNING_MODE` | `true` to observe without blocking and auto-append seen domains/IPs to the policy | `false` |
+| `PROCESS_INFO` | `true` to add pid/process fields to flow logs (needs shared PID namespace) | `false` |
+| `ALLOWLIST_IPS` | Comma-separated allowed IPs/CIDRs (takes precedence over policy file) | unset |
+| `ALLOWLIST_DOMAINS` | Comma-separated allowed domains (exact/wildcard/regex) | unset |
+| `DENYLIST_IPS` | Comma-separated denied IPs/CIDRs (with `DEFAULT_ACTION=allow`) | unset |
+| `DENYLIST_DOMAINS` | Comma-separated denied domains (with `DEFAULT_ACTION=allow`) | unset |
+| `HTTP_PORT` | Local HTTP proxy port | `8080` |
+| `HTTPS_PORT` | Local HTTPS proxy port | `8443` |
+| `DNS_PORT` | DNS listen port | `53` |
+| `DNS_UPSTREAMS` | Upstream DNS servers (comma-separated) | `127.0.0.11:53` |
+| `DNS_HARDENING` | Anti-exfil checks in the DNS proxy: qname/label length caps, NULL and bulky-TXT answer rejection, per-source rate limiting | `true` |
+| `LOG_LEVEL` | TRACE, DEBUG, INFO, WARN, ERROR | `INFO` |
+| `LOG_FILE` | Optional path for a persistent log file | unset |
+| `HOSTNAME` | Identifies this instance in shipped logs | unset |
+| `DASHBOARD_HOST` | Dashboard URL for log shipping | unset |
+| `DASHBOARD_API_KEY` | Must match `API_KEY` on the dashboard | unset |
+| `DASHBOARD_QUEUE_SIZE` | Log buffer before shipping; drops when full | `1024` |
+| `DASHBOARD_START_DELAY` | Delay before log shipping starts (`5s`, `1m`, ...) | `5s` |
+| `ENABLE_REMOTE_UNBLOCK` | Poll dashboard for remote unblock requests | `false` |
+| `UNBLOCK_POLL_INTERVAL` | Unblock poll interval | `10s` |
+| `NOTIFICATION_HOST` | Gotify server URL for blocked-traffic alerts | unset |
+| `NOTIFICATION_KEY` | Gotify application key | unset |
+| `NOTIFICATION_BACKOFF_SECONDS` | Duplicate-alert backoff | `60` |
+| `NOTIFICATION_IGNORE_DOMAINS` | Domains to skip for notifications (wildcards ok) | unset |
+| `NFLOG_BUFSIZE` | Netfilter log buffer size | `96` |
+| `NFLOG_QTHRESH` | Netfilter log queue threshold | `50` |
 
-### g0efilter-dashboard
+#### g0efilter-dashboard
 
-| Variable        | Description                                                                                                       | Default |
-| --------------- | ----------------------------------------------------------------------------------------------------------------- | ------- |
-| `PORT`          | Address/port the dashboard listens on (HTTP UI + API). Can be just a port (`8081`) or address+port (`:8081`)     | `:8081` |
-| `API_KEY`       | API key used to authenticate incoming log data from the `g0efilter` container                                    | unset   |
-| `LOG_LEVEL`     | Log level (TRACE, DEBUG, INFO, WARN, ERROR)                                                                       | `INFO`  |
-| `BUFFER_SIZE`   | In-memory circular buffer capacity. Oldest events are dropped when full                                           | `5000`  |
-| `READ_LIMIT`    | Maximum events returned per API request. Should match `BUFFER_SIZE` so the UI can backfill the full buffer        | `5000`  |
-| `SSE_RETRY_MS`  | Server-Sent Events (SSE) client retry interval in milliseconds                                                    | `2000`  |
-| `WRITE_TIMEOUT` | HTTP write timeout in seconds (0 = no timeout, recommended for SSE)                                               | `0`     |
-| `RATE_RPS`      | Maximum average requests per second (rate-limit)                                                                  | `50`    |
-| `RATE_BURST`    | Maximum burst size for rate-limiting (in requests)                                                                | `100`   |
+| Variable | Description | Default |
+| --- | --- | --- |
+| `PORT` | Listen address/port for UI and API | `:8081` |
+| `API_KEY` | Authenticates log ingestion from g0efilter | unset |
+| `LOG_LEVEL` | TRACE, DEBUG, INFO, WARN, ERROR | `INFO` |
+| `BUFFER_SIZE` | In-memory event buffer; oldest dropped when full | `5000` |
+| `READ_LIMIT` | Max events per API request | `5000` |
+| `SSE_RETRY_MS` | SSE client retry interval (ms) | `2000` |
+| `WRITE_TIMEOUT` | HTTP write timeout in seconds (0 = none, recommended for SSE) | `0` |
+| `RATE_RPS` | Rate limit, requests per second | `50` |
+| `RATE_BURST` | Rate limit burst | `100` |
 
-## Remote Unblock Feature
+### Remote unblock
 
-The **remote unblock** feature allows administrators to unblock domains or IPs directly from the dashboard UI. When enabled, g0efilter instances poll the dashboard for pending unblock requests and automatically update their policy files.
+Administrators can unblock domains/IPs from the dashboard UI; g0efilter instances poll for pending requests and update their policy files.
 
 > [!WARNING]
-> This feature is **disabled by default** (`ENABLE_REMOTE_UNBLOCK=false`). Do not enable this in non-test environments without proper authentication middleware protecting the dashboard. The `POST /api/v1/unblocks` endpoint must be protected by reverse proxy authentication (e.g., Authelia, Authentik, PocketID) to prevent unauthorized users from modifying your allowlist.
+> Disabled by default. Only enable behind authentication middleware: `POST /api/v1/unblocks` must be protected (Authelia, Authentik, PocketID, ...) or anyone reaching the dashboard can modify your allowlist.
 
-## Dashboard Reverse Proxy Suggestion
-
-I would recommend to place the **g0efilter-dashboard** behind a reverse proxy such as Traefik with the following controls:
-
-### API Endpoints
+<details>
+<summary><b>API endpoints and example Traefik configuration</b></summary>
 
 | Endpoint | Auth | Description |
 |----------|------|-------------|
-| `GET /health` | None | Health check for monitoring/load balancers |
-| `POST /api/v1/logs` | API Key | Log ingestion from g0efilter containers |
-| `GET /api/v1/unblocks?hostname=X` | API Key | Poll pending unblock requests (used by g0efilter) |
-| `POST /api/v1/unblocks/ack` | API Key | Acknowledge processed unblock (used by g0efilter) |
+| `GET /health` | None | Health check |
+| `POST /api/v1/logs` | API Key | Log ingestion from g0efilter |
+| `GET /api/v1/unblocks?hostname=X` | API Key | Poll pending unblocks (g0efilter) |
+| `POST /api/v1/unblocks/ack` | API Key | Acknowledge processed unblock (g0efilter) |
 | `GET /` | Middleware | Dashboard web UI |
-| `GET /api/v1/config` | Middleware | Server configuration (buffer size, read limit) for UI |
+| `GET /api/v1/config` | Middleware | Server configuration for UI |
 | `GET /api/v1/logs` | Middleware | Read logs |
 | `GET /api/v1/events` | Middleware | Server-Sent Events stream |
 | `DELETE /api/v1/logs` | Middleware | Clear logs |
-| `POST /api/v1/unblocks` | Middleware | Create unblock request (from dashboard UI) |
-| `GET /api/v1/unblocks/status` | Middleware | Poll unblock status (from dashboard UI) |
+| `POST /api/v1/unblocks` | Middleware | Create unblock request (UI) |
+| `GET /api/v1/unblocks/status` | Middleware | Poll unblock status (UI) |
 
-### Example Traefik Configuration
-
-If using Traefik as a reverse proxy, here's an example of a working yaml based configuration using two routers to handle different authentication requirements:
+Two Traefik routers handle the different auth requirements: an ingest router (API-key endpoints, no SSO) and a dashboard router (everything else behind your auth middleware).
 
 ```yaml
 http:
@@ -189,10 +271,6 @@ http:
         - ratelimit
       tls:
         certResolver: letsencrypt
-        domains:
-          - main: "example.com"
-            sans:
-              - "*.example.com"
 
     g0efilter-dash-router:
       entryPoints:
@@ -202,13 +280,9 @@ http:
       middlewares:
         - security-headers
         - ratelimit
-        - auth-oidc  # Your auth middleware
+        - auth-oidc  # your auth middleware
       tls:
         certResolver: letsencrypt
-        domains:
-          - main: "example.com"
-            sans:
-              - "*.example.com"
 
   services:
     g0efilter-dash-service:
@@ -217,12 +291,7 @@ http:
           - url: "http://g0efilter-dashboard:8081"
 ```
 
-**How it works:**
-- `g0efilter-ingest-router`: Matches `POST /api/v1/logs`, `/health`, `GET /api/v1/unblocks?hostname=X`, and `POST /api/v1/unblocks/ack` - no SSO required (API key auth)
-- `g0efilter-dash-router`: Matches all other requests to the dashboard - requires SSO/OIDC authentication
-- The more specific ingest router rule takes precedence for API calls and health checks
-- All other traffic (UI, reads, etc.) goes through the dashboard router with SSO protection
-
+</details>
 
 ### Example docker-compose.yaml
 
@@ -232,19 +301,15 @@ services:
     image: docker.io/g0lab/g0efilter:latest
     container_name: g0efilter
     volumes:
-      # Mount the directory (not a single file) so live reload works with all editors.
-      # Editors like vim use atomic save (write + rename) which creates a new inode;
-      # a single-file bind mount stays pinned to the old inode and never sees updates.
-      - ./policy/:/app/policy/
+      - ./policy/:/app/policy/   # directory mount, see Policy section
     cap_drop:
       - ALL
     cap_add:
-      - NET_ADMIN # Required for nftables modification
+      - NET_ADMIN                # required for nftables
     security_opt:
       - no-new-privileges
-    # Host-exposed port for dashboard (dashboard runs in same netns)
     ports:
-      - 8081:8081 # Dashboard port
+      - 8081:8081                # dashboard (runs in the same netns)
     read_only: true
     restart: always
     env_file:
@@ -253,8 +318,6 @@ services:
   g0efilter-dashboard:
     image: docker.io/g0lab/g0efilter-dashboard:latest
     container_name: g0efilter-dashboard
-    # optional - custom user
-    # user: 1000:1000
     cap_drop:
       - ALL
     security_opt:
@@ -271,24 +334,19 @@ services:
     network_mode: "service:g0efilter"
 ```
 
-### Verifying the Container Signatures
+### Verifying container signatures
 
-The g0efilter container images are signed with [Cosign](https://github.com/sigstore/cosign) using keyless signing:
+Images are signed with [Cosign](https://github.com/sigstore/cosign) keyless signing:
 
 ```bash
-# Verify g0efilter container
 cosign verify g0lab/g0efilter:latest \
-  --certificate-identity-regexp=https://github.com/g0lab/g0efilter \
-  --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
-  -o text
-
-# Verify g0efilter-dashboard container
-cosign verify g0lab/g0efilter-dashboard:latest \
   --certificate-identity-regexp=https://github.com/g0lab/g0efilter \
   --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
   -o text
 ```
 
+(Repeat with `g0lab/g0efilter-dashboard:latest` for the dashboard image.)
+
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT, see [LICENSE](LICENSE).

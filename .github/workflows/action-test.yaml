@@ -1,0 +1,63 @@
+---
+name: action-test
+
+on:
+  workflow_dispatch:
+
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "action.yml"
+      - "action/**"
+      - ".github/workflows/action-test.yaml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  block:
+    name: egress-policy block
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Start g0efilter (block)
+        uses: ./
+        with:
+          allowed-domains: |
+            example.org
+
+      - name: Allowed domain works
+        run: curl -sSf --max-time 20 https://example.org -o /dev/null
+
+      - name: GitHub baseline works
+        run: curl -sSf --max-time 20 https://api.github.com -o /dev/null
+
+      - name: Non-allowlisted domain is blocked
+        run: |
+          if curl -sf --max-time 20 https://example.com -o /dev/null; then
+            echo "example.com should have been blocked"
+            exit 1
+          fi
+          echo "OK: example.com blocked"
+
+  audit:
+    name: egress-policy audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Start g0efilter (audit)
+        uses: ./
+        with:
+          egress-policy: audit
+
+      - name: Non-allowlisted domain passes in audit mode
+        run: curl -sSf --max-time 20 https://example.com -o /dev/null

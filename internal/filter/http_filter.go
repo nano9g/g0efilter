@@ -20,6 +20,8 @@ func Serve80(ctx context.Context, allowlist []string, opts Options) error {
 		opts.ListenAddr = ":8080" // typical HTTP redirect port
 	}
 
+	opts.Denylist = NormalizePatterns(opts.Denylist)
+
 	return serveTCP(ctx, opts.ListenAddr, opts.Logger, handleHTTP, NormalizePatterns(allowlist), opts, "http")
 }
 
@@ -35,19 +37,27 @@ func handleHTTP(conn net.Conn, allowlist []string, opts Options) error {
 
 	host, headBytes, br, parseErr := parseAndValidateHTTP(conn, tc, opts)
 
-	allowed := allowedHost(host, allowlist)
+	// A parse failure always yields an empty host, so hostPermitted covers it:
+	// blocked under default-deny, forwarded under default-allow/learning.
+	permitted := hostPermitted(host, allowlist, opts)
 	if opts.Logger != nil {
-		opts.Logger.Debug("http.allowlist_check", "host", host, "allowed", allowed)
+		opts.Logger.Debug("http.allowlist_check", "host", host, "allowed", permitted)
 	}
 
-	if parseErr != nil || host == "" || !allowed {
-		sourceIP, sourcePort := sourceAddr(conn)
+	sourceIP, sourcePort := sourceAddr(conn)
+	wasAudited := audited(permitted, opts)
+
+	if wasAudited {
+		logAuditedHTTP(conn, tc, host, parseErr, sourceIP, sourcePort, opts)
+	} else if !permitted {
 		handleBlockedHTTP(conn, tc, host, parseErr, sourceIP, sourcePort, opts)
 
 		return nil
 	}
 
-	return handleAllowedHTTP(conn, tc, host, headBytes, br, opts)
+	maybeLearnHost(host, allowlist, opts)
+
+	return handleAllowedHTTP(conn, tc, host, headBytes, br, opts, !wasAudited)
 }
 
 func parseAndValidateHTTP(conn net.Conn, tc *net.TCPConn, opts Options) (string, []byte, *bufio.Reader, error) {
@@ -123,7 +133,36 @@ func logBlockedHTTP(
 	sourcePort int,
 	opts Options,
 ) {
+	reason := httpViolationReason(host, parseErr, opts)
+
+	// Try to recover original dst so we can compute flow_id and emit synthetic redirect
+	destIP, destPort := getDestinationInfo(conn, tc, host, sourceIP, sourcePort, opts)
+
+	// Emitting normalised fields for ingestion; include flow_id when available
+	logBlockedConnection(opts, componentHTTP, reason, host, conn, destIP, destPort)
+}
+
+// logAuditedHTTP logs a would-be-blocked HTTP request that audit mode lets through.
+func logAuditedHTTP(
+	conn net.Conn,
+	tc *net.TCPConn,
+	host string,
+	parseErr error,
+	sourceIP string,
+	sourcePort int,
+	opts Options,
+) {
+	reason := httpViolationReason(host, parseErr, opts)
+	destIP, destPort := getDestinationInfo(conn, tc, host, sourceIP, sourcePort, opts)
+	logAuditedConnection(opts, componentHTTP, reason, host, conn, destIP, destPort)
+}
+
+func httpViolationReason(host string, parseErr error, opts Options) string {
 	reason := "not-allowlisted"
+	if opts.DefaultAllow {
+		reason = "denylisted"
+	}
+
 	if parseErr != nil {
 		reason = "parse-failed"
 	}
@@ -132,11 +171,7 @@ func logBlockedHTTP(
 		reason = "no-host"
 	}
 
-	// Try to recover original dst so we can compute flow_id and emit synthetic redirect
-	destIP, destPort := getDestinationInfo(conn, tc, host, sourceIP, sourcePort, opts)
-
-	// Emitting normalised fields for ingestion; include flow_id when available
-	logBlockedConnection(opts, componentHTTP, reason, host, conn, destIP, destPort)
+	return reason
 }
 
 func getDestinationInfo(
@@ -172,6 +207,8 @@ func getDestinationInfo(
 	return "", 0
 }
 
+// handleAllowedHTTP forwards a permitted connection. logAllowed is false for
+// audited flows, which already logged their AUDIT verdict.
 func handleAllowedHTTP(
 	conn net.Conn,
 	tc *net.TCPConn,
@@ -179,6 +216,7 @@ func handleAllowedHTTP(
 	headBytes []byte,
 	br *bufio.Reader,
 	opts Options,
+	logAllowed bool,
 ) error {
 	target, err := originalDstTCP(tc)
 	if err != nil {
@@ -189,10 +227,23 @@ func handleAllowedHTTP(
 		return err
 	}
 
-	if opts.Logger != nil {
+	// No Host header to learn from - record the destination IP instead
+	if host == "" {
+		destIP, _ := parseHostPort(target)
+		maybeLearnIP(destIP, opts)
+	}
+
+	if opts.Logger != nil && logAllowed {
 		logAllowedConnection(opts, componentHTTP, target, host, conn)
 	}
 
+	return connectAndSpliceHTTP(conn, host, target, headBytes, br, opts)
+}
+
+// connectAndSpliceHTTP dials the original destination, replays the parsed head, and splices.
+func connectAndSpliceHTTP(
+	conn net.Conn, host, target string, headBytes []byte, br *bufio.Reader, opts Options,
+) error {
 	backend, err := newDialerFromOptions(opts).Dial("tcp", target)
 	if err != nil {
 		logdstConnDialError(opts, componentHTTP, conn, target, err)
@@ -214,10 +265,8 @@ func handleAllowedHTTP(
 
 	if len(headBytes) > 0 {
 		_, writeErr := backend.Write(headBytes)
-		if writeErr != nil {
-			if opts.Logger != nil {
-				opts.Logger.Debug("http.backend_head_write_error", "err", writeErr.Error())
-			}
+		if writeErr != nil && opts.Logger != nil {
+			opts.Logger.Debug("http.backend_head_write_error", "err", writeErr.Error())
 		}
 	}
 
@@ -229,6 +278,8 @@ func handleAllowedHTTP(
 }
 
 // readHeadWithTextproto parses HTTP headers and returns normalized host and raw bytes.
+// Consumed bytes are returned even on parse error so the connection can still be
+// forwarded under default-allow/learning mode.
 func readHeadWithTextproto(br *bufio.Reader) (string, []byte, error) {
 	var buf bytes.Buffer
 
@@ -237,12 +288,12 @@ func readHeadWithTextproto(br *bufio.Reader) (string, []byte, error) {
 
 	_, err := tp.ReadLine()
 	if err != nil {
-		return "", nil, fmt.Errorf("read request line: %w", err)
+		return "", buf.Bytes(), fmt.Errorf("read request line: %w", err)
 	}
 
 	mh, err := tp.ReadMIMEHeader()
 	if err != nil {
-		return "", nil, fmt.Errorf("read MIME header: %w", err)
+		return "", buf.Bytes(), fmt.Errorf("read MIME header: %w", err)
 	}
 
 	host := mh.Get("Host")

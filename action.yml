@@ -1,0 +1,47 @@
+---
+name: "g0efilter"
+description: >-
+  Filter egress traffic from GitHub Actions runners. Non-allowlisted
+  connections are blocked (or logged in audit mode) using nftables and
+  TLS SNI / HTTP Host inspection, and a summary of decisions is added
+  to the job summary.
+branding:
+  icon: shield
+  color: green
+
+inputs:
+  allowed-domains:
+    description: >-
+      Newline-separated domains to allow. Wildcards (*.example.com) and
+      regex (/^cache-[0-9]+\.example\.com$/) are supported. GitHub's own
+      infrastructure is always allowed so the workflow can run.
+    required: false
+    default: ""
+  allowed-ips:
+    description: "Newline-separated IPs/CIDRs to allow. The runner's DNS resolvers are always allowed."
+    required: false
+    default: ""
+  egress-policy:
+    description: "block (enforce) or audit (log would-be-blocked traffic without blocking)"
+    required: false
+    default: "block"
+  mode:
+    description: "https (TLS SNI / HTTP Host inspection) or dns (resolution filtering)"
+    required: false
+    default: "https"
+  log-level:
+    description: "g0efilter log level (DEBUG, INFO, WARN, ERROR)"
+    required: false
+    default: "INFO"
+  image:
+    description: >-
+      g0efilter container image to run. Defaults to the image matching the
+      action's release tag (e.g. uses: g0lab/g0efilter@v0.6.0 runs
+      g0efilter:v0.6.0), or :latest when referenced via a branch.
+    required: false
+    default: ""
+
+runs:
+  using: node24
+  main: action/main.js
+  post: action/post.js

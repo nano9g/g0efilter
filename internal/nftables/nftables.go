@@ -142,10 +142,29 @@ func applyRuleset(ctx context.Context, ruleset string) error {
 	return nil
 }
 
-// ApplyNftRulesWithContext generates and applies the nftables ruleset using the provided context.
+// PolicyRules describes the inputs for ruleset generation and application.
+type PolicyRules struct {
+	AllowIPs     []string
+	DenyIPs      []string // enforced only when DefaultAllow is true
+	DefaultAllow bool
+	Audit        bool // dry-run: would-be drops are logged with the "audit" prefix and accepted
+}
+
+// ApplyNftRulesWithContext generates and applies a default-deny ruleset using the provided context.
 func ApplyNftRulesWithContext(
 	ctx context.Context,
 	allowlist []string,
+	httpsPortStr,
+	httpPortStr,
+	dnsPortStr string) error {
+	//nolint:exhaustruct
+	return ApplyPolicyRulesWithContext(ctx, PolicyRules{AllowIPs: allowlist}, httpsPortStr, httpPortStr, dnsPortStr)
+}
+
+// ApplyPolicyRulesWithContext generates and applies the nftables ruleset for the given policy stance.
+func ApplyPolicyRulesWithContext(
+	ctx context.Context,
+	rules PolicyRules,
 	httpsPortStr,
 	httpPortStr,
 	dnsPortStr string) error {
@@ -154,8 +173,8 @@ func ApplyNftRulesWithContext(
 		mode = actions.ModeHTTPS
 	}
 
-	if len(allowlist) == 0 {
-		allowlist = []string{"127.0.0.1"}
+	if len(rules.AllowIPs) == 0 {
+		rules.AllowIPs = []string{"127.0.0.1"}
 	}
 
 	httpsPort, err := parsePort(httpsPortStr, "HTTPS")
@@ -173,9 +192,21 @@ func ApplyNftRulesWithContext(
 		return err
 	}
 
-	v4, v6 := splitByFamily(allowlist)
+	allowV4, allowV6 := splitByFamily(rules.AllowIPs)
+	denyV4, denyV6 := splitByFamily(rules.DenyIPs)
 
-	ruleset := GenerateNftRuleset(v4, v6, httpsPort, httpPort, dnsPort, mode)
+	ruleset := GenerateRuleset(RulesetConfig{
+		AllowV4:      allowV4,
+		AllowV6:      allowV6,
+		DenyV4:       denyV4,
+		DenyV6:       denyV6,
+		HTTPSPort:    httpsPort,
+		HTTPPort:     httpPort,
+		DNSPort:      dnsPort,
+		Mode:         mode,
+		DefaultAllow: rules.DefaultAllow,
+		Audit:        rules.Audit,
+	})
 	if !strings.HasSuffix(ruleset, "\n") {
 		ruleset += "\n"
 	}
@@ -196,6 +227,313 @@ func ApplyNftRulesWithContext(
 // ApplyNftRules applies nftables rules using a background context.
 func ApplyNftRules(allowlist []string, httpsPortStr, httpPortStr, dnsPortStr string) error {
 	return ApplyNftRulesWithContext(context.Background(), allowlist, httpsPortStr, httpPortStr, dnsPortStr)
+}
+
+// setBlock renders a named nftables set, omitting the elements line when the list is empty.
+func setBlock(name, addrType, elements string) string {
+	if elements == "" {
+		return fmt.Sprintf("    set %s {\n        type %s\n        flags interval\n    }\n", name, addrType)
+	}
+
+	return fmt.Sprintf(
+		"    set %s {\n        type %s\n        flags interval\n        elements = {%s}\n    }\n",
+		name, addrType, elements,
+	)
+}
+
+// generateHTTPSFilterRulesAllow creates IPv4 filter rules for HTTPS default-allow (denylist) mode.
+func generateHTTPSFilterRulesAllow(allowSet, denySet string, httpPort, httpsPort int) string {
+	return fmt.Sprintf(`
+table ip g0efilter_v4 {
+%s%s
+    chain egress_allowlist_v4 {
+        type filter hook output priority filter; policy accept;
+
+        # Always allow loopback-bound traffic
+        oifname "lo" accept
+
+        # Allow already established connections
+        ct state established,related accept
+
+        # Bypass marked traffic (SO_MARK=0x1)
+        meta mark 0x1 accept
+
+        # Allow local proxies on 127.0.0.1
+        ip daddr 127.0.0.1 tcp dport %d accept    # HTTP proxy
+        ip daddr 127.0.0.1 tcp dport %d accept    # HTTPS proxy
+
+        # Explicit allowlist overrides the denylist
+        ip daddr @allow_daddr_v4 accept
+
+        # Log and drop deny-listed destinations
+        ip daddr @deny_daddr_v4 log prefix "blocked" group 0
+        ip daddr @deny_daddr_v4 drop
+    }
+}
+`, setBlock("allow_daddr_v4", "ipv4_addr", allowSet),
+		setBlock("deny_daddr_v4", "ipv4_addr", denySet),
+		httpPort, httpsPort)
+}
+
+// generateHTTPSNATRulesAllow creates IPv4 NAT rules for HTTPS default-allow mode. Deny-listed
+// IPs are not redirected so they keep their original daddr for the filter chain to log+drop.
+func generateHTTPSNATRulesAllow(allowSet, denySet string, httpPort, httpsPort int) string {
+	return fmt.Sprintf(`
+table ip g0efilter_nat_v4 {
+%s%s
+    chain output {
+        type nat hook output priority -100;
+
+        # Bypass marked traffic (SO_MARK=0x1)
+        meta mark 0x1 return
+
+        # Return if allow-listed IP
+        ip daddr @allow_daddr_v4 return
+
+        # Deny-listed IPs are dropped in the filter chain, not proxied
+        ip daddr @deny_daddr_v4 return
+
+        # Redirect HTTP (80) to local HTTP proxy
+        tcp dport 80  log prefix "redirected" group 0
+        tcp dport 80  redirect to :%d
+
+        # Redirect HTTPS (443) to local HTTPS proxy
+        tcp dport 443 log prefix "redirected" group 0
+        tcp dport 443 redirect to :%d
+    }
+}
+`, setBlock("allow_daddr_v4", "ipv4_addr", allowSet),
+		setBlock("deny_daddr_v4", "ipv4_addr", denySet),
+		httpPort, httpsPort)
+}
+
+// generateHTTPSFilterRulesAllowV6 creates IPv6 filter rules for HTTPS default-allow mode.
+func generateHTTPSFilterRulesAllowV6(allowSet, denySet string, httpPort, httpsPort int) string {
+	return fmt.Sprintf(`
+table ip6 g0efilter_v6 {
+%s%s
+    chain egress_allowlist_v6 {
+        type filter hook output priority filter; policy accept;
+
+        # Always allow loopback-bound traffic
+        oifname "lo" accept
+
+        # Allow already established connections
+        ct state established,related accept
+
+        # Bypass marked traffic (SO_MARK=0x1)
+        meta mark 0x1 accept
+
+        # Allow local proxies on ::1
+        ip6 daddr ::1 tcp dport %d accept    # HTTP proxy
+        ip6 daddr ::1 tcp dport %d accept    # HTTPS proxy
+
+        # Explicit allowlist overrides the denylist
+        ip6 daddr @allow_daddr_v6 accept
+
+        # Log and drop deny-listed destinations
+        ip6 daddr @deny_daddr_v6 log prefix "blocked" group 0
+        ip6 daddr @deny_daddr_v6 drop
+    }
+}
+`, setBlock("allow_daddr_v6", "ipv6_addr", allowSet),
+		setBlock("deny_daddr_v6", "ipv6_addr", denySet),
+		httpPort, httpsPort)
+}
+
+// generateHTTPSNATRulesAllowV6 creates IPv6 NAT rules for HTTPS default-allow mode.
+func generateHTTPSNATRulesAllowV6(allowSet, denySet string, httpPort, httpsPort int) string {
+	return fmt.Sprintf(`
+table ip6 g0efilter_nat_v6 {
+%s%s
+    chain output {
+        type nat hook output priority -100;
+
+        # Bypass marked traffic (SO_MARK=0x1)
+        meta mark 0x1 return
+
+        # Return if allow-listed IP
+        ip6 daddr @allow_daddr_v6 return
+
+        # Deny-listed IPs are dropped in the filter chain, not proxied
+        ip6 daddr @deny_daddr_v6 return
+
+        # Redirect HTTP (80) to local HTTP proxy
+        tcp dport 80  log prefix "redirected" group 0
+        tcp dport 80  redirect to :%d
+
+        # Redirect HTTPS (443) to local HTTPS proxy
+        tcp dport 443 log prefix "redirected" group 0
+        tcp dport 443 redirect to :%d
+    }
+}
+`, setBlock("allow_daddr_v6", "ipv6_addr", allowSet),
+		setBlock("deny_daddr_v6", "ipv6_addr", denySet),
+		httpPort, httpsPort)
+}
+
+// generateDNSFilterRulesAllow creates IPv4 filter rules for DNS default-allow mode.
+// The chain is already policy accept; deny-listed IPs are logged and dropped.
+func generateDNSFilterRulesAllow(allowSet, denySet string, dnsPort int) string {
+	return fmt.Sprintf(`
+table ip g0efilter_v4 {
+%s%s
+    chain egress_allowlist_v4 {
+        type filter hook output priority filter; policy accept;
+
+        # Always allow loopback-bound traffic
+        oifname "lo" accept
+
+        # Allow already established connections
+        ct state established,related accept
+
+        # Bypass marked traffic (SO_MARK=0x1)
+        meta mark 0x1 accept
+
+        # Allow local DNS proxy on loopback
+        ip daddr 127.0.0.1 udp dport %d accept
+        ip daddr 127.0.0.1 tcp dport %d accept
+
+        # Explicit allowlist overrides the denylist
+        ip daddr @allow_daddr_v4 accept
+
+        # Log and drop deny-listed destinations
+        ip daddr @deny_daddr_v4 log prefix "blocked" group 0
+        ip daddr @deny_daddr_v4 drop
+    }
+}
+`, setBlock("allow_daddr_v4", "ipv4_addr", allowSet),
+		setBlock("deny_daddr_v4", "ipv4_addr", denySet),
+		dnsPort, dnsPort)
+}
+
+// generateDNSFilterRulesAllowV6 creates IPv6 filter rules for DNS default-allow mode.
+func generateDNSFilterRulesAllowV6(allowSet, denySet string, dnsPort int) string {
+	return fmt.Sprintf(`
+table ip6 g0efilter_v6 {
+%s%s
+    chain egress_allowlist_v6 {
+        type filter hook output priority filter; policy accept;
+
+        # Always allow loopback-bound traffic
+        oifname "lo" accept
+
+        # Allow already established connections
+        ct state established,related accept
+
+        # Bypass marked traffic (SO_MARK=0x1)
+        meta mark 0x1 accept
+
+        # Allow local DNS proxy on loopback
+        ip6 daddr ::1 udp dport %d accept
+        ip6 daddr ::1 tcp dport %d accept
+
+        # Explicit allowlist overrides the denylist
+        ip6 daddr @allow_daddr_v6 accept
+
+        # Log and drop deny-listed destinations
+        ip6 daddr @deny_daddr_v6 log prefix "blocked" group 0
+        ip6 daddr @deny_daddr_v6 drop
+    }
+}
+`, setBlock("allow_daddr_v6", "ipv6_addr", allowSet),
+		setBlock("deny_daddr_v6", "ipv6_addr", denySet),
+		dnsPort, dnsPort)
+}
+
+// generateDNSStrictFilterRules creates IPv4 filter rules for dns-strict mode: policy drop,
+// with a runtime resolved_allow_v4 timeout set that the DNS proxy populates as allowed
+// domains resolve. Connections to IPs never resolved through the proxy are dropped.
+func generateDNSStrictFilterRules(allowSet string, dnsPort int) string {
+	return fmt.Sprintf(`
+table ip g0efilter_v4 {
+%s
+    set resolved_allow_v4 {
+        type ipv4_addr
+        flags timeout
+    }
+
+    chain egress_allowlist_v4 {
+        type filter hook output priority filter; policy drop;
+
+        # Always allow loopback-bound traffic
+        oifname "lo" accept
+
+        # Allow already established connections
+        ct state established,related accept
+
+        # Bypass marked traffic (SO_MARK=0x1)
+        meta mark 0x1 accept
+
+        # Allow local DNS proxy on loopback
+        ip daddr 127.0.0.1 udp dport %d accept
+        ip daddr 127.0.0.1 tcp dport %d accept
+
+        # Allow ping to allow-listed destinations
+        icmp type echo-request ip daddr @allow_daddr_v4 accept
+
+        # Allow and log statically allow-listed destinations
+        ip daddr @allow_daddr_v4 log prefix "allowed" group 0
+        ip daddr @allow_daddr_v4 accept
+
+        # Allow destinations resolved through the DNS proxy (TTL-bounded)
+        ip daddr @resolved_allow_v4 log prefix "allowed" group 0
+        ip daddr @resolved_allow_v4 accept
+
+        # Log and drop everything else
+        log prefix "blocked" group 0
+        drop
+    }
+}
+`, setBlock("allow_daddr_v4", "ipv4_addr", allowSet), dnsPort, dnsPort)
+}
+
+// generateDNSStrictFilterRulesV6 creates IPv6 filter rules for dns-strict mode.
+func generateDNSStrictFilterRulesV6(allowSet string, dnsPort int) string {
+	return fmt.Sprintf(`
+table ip6 g0efilter_v6 {
+%s
+    set resolved_allow_v6 {
+        type ipv6_addr
+        flags timeout
+    }
+
+    chain egress_allowlist_v6 {
+        type filter hook output priority filter; policy drop;
+
+        # Always allow loopback-bound traffic
+        oifname "lo" accept
+
+        # Allow already established connections
+        ct state established,related accept
+
+        # Bypass marked traffic (SO_MARK=0x1)
+        meta mark 0x1 accept
+
+        # Allow local DNS proxy on loopback
+        ip6 daddr ::1 udp dport %d accept
+        ip6 daddr ::1 tcp dport %d accept
+
+        # Allow ping to allow-listed destinations
+        icmpv6 type echo-request ip6 daddr @allow_daddr_v6 accept
+
+        # ICMPv6 neighbour discovery is required for any IPv6 connectivity
+        icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit, nd-router-advert } accept
+
+        # Allow and log statically allow-listed destinations
+        ip6 daddr @allow_daddr_v6 log prefix "allowed" group 0
+        ip6 daddr @allow_daddr_v6 accept
+
+        # Allow destinations resolved through the DNS proxy (TTL-bounded)
+        ip6 daddr @resolved_allow_v6 log prefix "allowed" group 0
+        ip6 daddr @resolved_allow_v6 accept
+
+        # Log and drop everything else
+        log prefix "blocked" group 0
+        drop
+    }
+}
+`, setBlock("allow_daddr_v6", "ipv6_addr", allowSet), dnsPort, dnsPort)
 }
 
 // generateDNSFilterRules creates nftables filter rules for DNS mode that block non-allowlisted traffic.
@@ -460,54 +798,112 @@ table ip6 g0efilter_nat_v6 {
 `, dnsPort, dnsPort, dnsPort, dnsPort)
 }
 
-// GenerateNftRuleset generates a complete nftables ruleset for the specified mode, ports, and allowlists.
-// v4 and v6 are pre-split IPv4 and IPv6 allowlist entries respectively.
+// GenerateNftRuleset generates a complete default-deny nftables ruleset for the specified
+// mode, ports, and allowlists. v4 and v6 are pre-split IPv4 and IPv6 allowlist entries.
 func GenerateNftRuleset(v4, v6 []string, httpsPort, httpPort, dnsPort int, mode string) string {
-	mode = strings.ToLower(mode)
-	if mode != actions.ModeDNS {
+	//nolint:exhaustruct
+	return GenerateRuleset(RulesetConfig{
+		AllowV4:   v4,
+		AllowV6:   v6,
+		HTTPSPort: httpsPort,
+		HTTPPort:  httpPort,
+		DNSPort:   dnsPort,
+		Mode:      mode,
+	})
+}
+
+// RulesetConfig holds all inputs for nftables ruleset generation.
+type RulesetConfig struct {
+	AllowV4, AllowV6 []string
+	DenyV4, DenyV6   []string // enforced only when DefaultAllow is true
+	HTTPSPort        int
+	HTTPPort         int
+	DNSPort          int
+	Mode             string
+	DefaultAllow     bool
+	Audit            bool // dry-run: would-be drops logged with the "audit" prefix and accepted
+}
+
+// GenerateRuleset generates a complete nftables ruleset. With DefaultAllow the filter
+// chains are policy accept and deny-listed IPs are logged and dropped; otherwise the
+// default-deny allowlist model applies. HTTP/HTTPS (or DNS) traffic is redirected
+// through the local proxies in both stances so domain policy applies. With Audit,
+// every drop verdict becomes an "audit" log plus accept.
+func GenerateRuleset(cfg RulesetConfig) string {
+	ruleset := generateEnforcingRuleset(cfg)
+	if cfg.Audit {
+		ruleset = auditRuleset(ruleset)
+	}
+
+	return ruleset
+}
+
+// auditRuleset converts a ruleset's enforcement verdicts to dry-run equivalents:
+// chains fail open and would-be drops log with the "audit" prefix instead. The
+// replacements match the exact verdict forms our templates emit.
+func auditRuleset(ruleset string) string {
+	ruleset = strings.ReplaceAll(ruleset, "policy drop;", "policy accept;")
+	ruleset = strings.ReplaceAll(ruleset, `log prefix "blocked" group 0`, `log prefix "audit" group 0`)
+	ruleset = strings.ReplaceAll(ruleset, "\n        drop\n", "\n        accept\n")
+	ruleset = strings.ReplaceAll(ruleset, " @deny_daddr_v4 drop", " @deny_daddr_v4 accept")
+	ruleset = strings.ReplaceAll(ruleset, " @deny_daddr_v6 drop", " @deny_daddr_v6 accept")
+
+	return ruleset
+}
+
+func generateEnforcingRuleset(cfg RulesetConfig) string {
+	mode := strings.ToLower(cfg.Mode)
+	if mode != actions.ModeDNS && mode != actions.ModeDNSStrict {
 		mode = actions.ModeHTTPS
 	}
 
-	allowSetV4 := strings.Join(v4, ", ")
+	// Placeholder entries keep the allow sets non-empty (loopback is harmless to allow).
+	allowSetV4 := strings.Join(cfg.AllowV4, ", ")
 	if allowSetV4 == "" {
 		allowSetV4 = "127.0.0.1"
 	}
 
-	// Generate IPv4 rules
-	var filterRules string
-	if mode == actions.ModeDNS {
-		filterRules = generateDNSFilterRules(allowSetV4, dnsPort)
-	} else {
-		filterRules = generateHTTPSFilterRules(allowSetV4, httpPort, httpsPort)
-	}
-
-	var natRules string
-	if mode == actions.ModeDNS {
-		natRules = generateDNSNATRules(dnsPort)
-	} else {
-		natRules = generateHTTPSNATRules(allowSetV4, httpPort, httpsPort)
-	}
-
-	ruleset := filterRules + "\n" + natRules
-
-	// Generate IPv6 rules — always redirect port 80/443 through the proxy so
-	// domain-based filtering works even when a domain resolves to a AAAA record.
-	// If no explicit IPv6 IPs are allowlisted, use ::1 as the placeholder (same
-	// pattern as IPv4 using 127.0.0.1) so the set is never empty.
-	allowSetV6 := strings.Join(v6, ", ")
+	allowSetV6 := strings.Join(cfg.AllowV6, ", ")
 	if allowSetV6 == "" {
 		allowSetV6 = "::1"
 	}
 
-	if mode == actions.ModeDNS {
-		ruleset += "\n" + generateDNSFilterRulesV6(allowSetV6, dnsPort)
-		ruleset += "\n" + generateDNSNATRulesV6(dnsPort)
-	} else {
-		ruleset += "\n" + generateHTTPSFilterRulesV6(allowSetV6, httpPort, httpsPort)
-		ruleset += "\n" + generateHTTPSNATRulesV6(allowSetV6, httpPort, httpsPort)
+	if cfg.DefaultAllow {
+		denySetV4 := strings.Join(cfg.DenyV4, ", ")
+		denySetV6 := strings.Join(cfg.DenyV6, ", ")
+
+		// Strict enforcement is meaningless under default-allow: fall back to plain DNS-mode rules
+		if mode == actions.ModeDNS || mode == actions.ModeDNSStrict {
+			return generateDNSFilterRulesAllow(allowSetV4, denySetV4, cfg.DNSPort) +
+				"\n" + generateDNSNATRules(cfg.DNSPort) +
+				"\n" + generateDNSFilterRulesAllowV6(allowSetV6, denySetV6, cfg.DNSPort) +
+				"\n" + generateDNSNATRulesV6(cfg.DNSPort)
+		}
+
+		return generateHTTPSFilterRulesAllow(allowSetV4, denySetV4, cfg.HTTPPort, cfg.HTTPSPort) +
+			"\n" + generateHTTPSNATRulesAllow(allowSetV4, denySetV4, cfg.HTTPPort, cfg.HTTPSPort) +
+			"\n" + generateHTTPSFilterRulesAllowV6(allowSetV6, denySetV6, cfg.HTTPPort, cfg.HTTPSPort) +
+			"\n" + generateHTTPSNATRulesAllowV6(allowSetV6, denySetV6, cfg.HTTPPort, cfg.HTTPSPort)
 	}
 
-	return ruleset
+	if mode == actions.ModeDNSStrict {
+		return generateDNSStrictFilterRules(allowSetV4, cfg.DNSPort) +
+			"\n" + generateDNSNATRules(cfg.DNSPort) +
+			"\n" + generateDNSStrictFilterRulesV6(allowSetV6, cfg.DNSPort) +
+			"\n" + generateDNSNATRulesV6(cfg.DNSPort)
+	}
+
+	if mode == actions.ModeDNS {
+		return generateDNSFilterRules(allowSetV4, cfg.DNSPort) +
+			"\n" + generateDNSNATRules(cfg.DNSPort) +
+			"\n" + generateDNSFilterRulesV6(allowSetV6, cfg.DNSPort) +
+			"\n" + generateDNSNATRulesV6(cfg.DNSPort)
+	}
+
+	return generateHTTPSFilterRules(allowSetV4, cfg.HTTPPort, cfg.HTTPSPort) +
+		"\n" + generateHTTPSNATRules(allowSetV4, cfg.HTTPPort, cfg.HTTPSPort) +
+		"\n" + generateHTTPSFilterRulesV6(allowSetV6, cfg.HTTPPort, cfg.HTTPSPort) +
+		"\n" + generateHTTPSNATRulesV6(allowSetV6, cfg.HTTPPort, cfg.HTTPSPort)
 }
 
 func deleteTableIfExists(ctx context.Context, family, table string) error {
@@ -685,6 +1081,8 @@ func mapPrefixToAction(prefix string) string {
 		return actions.ActionRedirected
 	case strings.Contains(pl, "block"):
 		return actions.ActionBlocked
+	case strings.Contains(pl, "audit"):
+		return actions.ActionAudit
 	case strings.Contains(pl, "allow"):
 		return actions.ActionAllowed
 	default:
@@ -750,11 +1148,11 @@ func processActionEvent(
 	)
 	fields = append(fields, "action", action)
 
-	// Level policy: REDIRECTED and ALLOWED at DEBUG, BLOCKED at INFO
+	// Level policy: REDIRECTED and ALLOWED at DEBUG, BLOCKED at WARN
 	if action == actions.ActionRedirected || action == actions.ActionAllowed {
 		lg.Debug("nflog.event", fields...)
 	} else {
-		lg.Info("nflog.event", fields...)
+		lg.Warn("nflog.event", fields...)
 	}
 }
 

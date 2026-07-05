@@ -126,8 +126,10 @@ func getValidateDomainTests() []struct {
 		{"starts with dot", ".example.com", true},
 		{"ends with dot after trim", "example.com..", true},
 		{"double dots", "example..com", true},
-		{"wildcard in middle", "ex*ample.com", true},
-		{"wildcard at end", "example.com*", true},
+		{"wildcard in middle", "ex*ample.com", false},
+		{"wildcard between labels", "sub.*.example.com", false},
+		{"consecutive wildcards", "sub.**.example.com", true},
+		{"wildcard no dot", "example*", true},
 		{"invalid wildcard", "*.", true},
 		{"IP address as domain", "192.168.1.1", true},
 		{"numeric TLD", "example.123", true},
@@ -682,7 +684,7 @@ func TestLoadFromEnv(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			ips, domains, err := loadFromEnv(slog.Default(), tt.envIPs, tt.envDomains)
+			pol, err := loadFromEnv(slog.Default(), tt.envIPs, tt.envDomains, "", "")
 
 			if tt.wantErr {
 				if err == nil {
@@ -698,12 +700,12 @@ func TestLoadFromEnv(t *testing.T) {
 				return
 			}
 
-			if !stringSlicesEqual(ips, tt.expectedIPs) {
-				t.Errorf("loadFromEnv() IPs = %v, want %v", ips, tt.expectedIPs)
+			if !stringSlicesEqual(pol.AllowIPs, tt.expectedIPs) {
+				t.Errorf("loadFromEnv() IPs = %v, want %v", pol.AllowIPs, tt.expectedIPs)
 			}
 
-			if !stringSlicesEqual(domains, tt.expectedDomains) {
-				t.Errorf("loadFromEnv() domains = %v, want %v", domains, tt.expectedDomains)
+			if !stringSlicesEqual(pol.AllowDomains, tt.expectedDomains) {
+				t.Errorf("loadFromEnv() domains = %v, want %v", pol.AllowDomains, tt.expectedDomains)
 			}
 		})
 	}

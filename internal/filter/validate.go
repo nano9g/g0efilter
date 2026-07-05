@@ -9,6 +9,8 @@ const (
 	maxHostLength      = 253 // RFC 1035
 	maxLabelLength     = 63  // RFC 1035
 	minValidHostLength = 1   // At least one character
+
+	unknownValue = "unknown"
 )
 
 // sanitizeHost validates and sanitizes a host/domain extracted from HTTP Host header or TLS SNI.
@@ -86,7 +88,7 @@ func determineStructureFailureReason(host string) string {
 		return "contains_double_dot"
 	}
 
-	return "unknown"
+	return unknownValue
 }
 
 func determineLabelFailureReason(host string) string {
@@ -101,7 +103,7 @@ func determineLabelFailureReason(host string) string {
 		}
 	}
 
-	return "unknown"
+	return unknownValue
 }
 
 func checkLabelValidity(label string, isTLD bool) string {
@@ -194,6 +196,44 @@ func isValidTLD(tld string) bool {
 
 	if isAllNumeric(tld) {
 		return false
+	}
+
+	return true
+}
+
+// sanitizeDNSQname validates a DNS query name and returns it lowercased. Unlike
+// HTTP/SNI hosts, underscore labels (_dmarc, _service._proto) and bare
+// single-label names are legal in DNS queries.
+func sanitizeDNSQname(qname string) (string, bool) {
+	if len(qname) < minValidHostLength || len(qname) > maxHostLength {
+		return "", false
+	}
+
+	lowered := strings.ToLower(qname)
+
+	for label := range strings.SplitSeq(lowered, ".") {
+		if !isValidDNSQnameLabel(label) {
+			return "", false
+		}
+	}
+
+	return lowered, true
+}
+
+// isValidDNSQnameLabel validates a single label of a DNS query name.
+func isValidDNSQnameLabel(label string) bool {
+	if len(label) < 1 || len(label) > maxLabelLength {
+		return false
+	}
+
+	if label[0] == '-' || label[len(label)-1] == '-' {
+		return false
+	}
+
+	for _, r := range label {
+		if !isValidDNSChar(r) && r != '_' {
+			return false
+		}
 	}
 
 	return true

@@ -2,6 +2,7 @@
 package filter
 
 import (
+	"bytes"
 	"context"
 	"log/slog"
 	"net"
@@ -655,6 +656,7 @@ func TestHandleAllowedRequest(t *testing.T) {
 		"192.168.1.1",
 		12345,
 		"test-flow-id",
+		true,
 	)
 
 	// Should have attempted to forward the request
@@ -737,5 +739,52 @@ func TestMarkedDialer(t *testing.T) {
 	expectedTimeout := 5 * time.Second
 	if dialer.Timeout != expectedTimeout {
 		t.Errorf("Expected timeout %v, got %v", expectedTimeout, dialer.Timeout)
+	}
+}
+
+//nolint:exhaustruct
+func TestHandleRefusesInvalidQname(t *testing.T) {
+	t.Parallel()
+
+	// Under default-allow an invalid qname must be refused, not treated as an
+	// empty host that would sail past the denylist and hardening checks.
+	handler := createDNSHandler(nil, Options{DefaultAllow: true, DNSHardening: true})
+
+	msg := &dns.Msg{}
+	msg.SetQuestion("bad name.example.com.", dns.TypeA)
+
+	mockWriter := &mockDNSResponseWriter{responses: make([]*dns.Msg, 0)}
+	handler.handle(mockWriter, msg)
+
+	if len(mockWriter.responses) != 1 {
+		t.Fatalf("expected one response, got %d", len(mockWriter.responses))
+	}
+
+	if rcode := mockWriter.responses[0].Rcode; rcode != dns.RcodeRefused {
+		t.Errorf("Rcode = %d, want REFUSED (%d)", rcode, dns.RcodeRefused)
+	}
+}
+
+//nolint:exhaustruct
+func TestDNSBlockedLogsAtWarn(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+
+	handler := createDNSHandler(nil, Options{Logger: slog.New(slog.NewJSONHandler(&buf, nil))})
+
+	msg := &dns.Msg{}
+	msg.SetQuestion("blocked.example.com.", dns.TypeA)
+	handler.handle(&mockDNSResponseWriter{responses: make([]*dns.Msg, 0)}, msg)
+
+	logged := buf.String()
+	if !strings.Contains(logged, "dns.blocked") {
+		t.Fatalf("expected dns.blocked log, got: %s", logged)
+	}
+
+	for line := range strings.SplitSeq(strings.TrimSpace(logged), "\n") {
+		if strings.Contains(line, "dns.blocked") && !strings.Contains(line, `"level":"WARN"`) {
+			t.Errorf("dns.blocked must log at WARN, got: %s", line)
+		}
 	}
 }

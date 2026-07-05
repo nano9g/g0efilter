@@ -352,7 +352,7 @@ func (s *Server) listUnblocksHandler(w http.ResponseWriter, r *http.Request) {
 //
 //nolint:funlen,tagliatelle // JSON uses snake_case for API compatibility
 func (s *Server) createUnblockHandler(w http.ResponseWriter, r *http.Request) {
-	const maxBody = 4096 // 4 KiB — small JSON payload
+	const maxBody = 4096 // 4 KiB - small JSON payload
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxBody)
 
@@ -421,7 +421,7 @@ func (s *Server) createUnblockHandler(w http.ResponseWriter, r *http.Request) {
 
 // ackUnblockHandler handles POST /api/v1/unblocks/ack requests.
 func (s *Server) ackUnblockHandler(w http.ResponseWriter, r *http.Request) {
-	const maxBody = 4096 // 4 KiB — small JSON payload
+	const maxBody = 4096 // 4 KiB - small JSON payload
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxBody)
 
@@ -511,8 +511,11 @@ func isValidSearchChars(q string) bool {
 }
 
 func hasInjectionPatterns(q string) bool {
-	return strings.Contains(q, "<script") ||
-		strings.Contains(q, "javascript:")
+	// Case-insensitive: <SCRIPT> and JAVASCRIPT: must not slip through.
+	lower := strings.ToLower(q)
+
+	return strings.Contains(lower, "<script") ||
+		strings.Contains(lower, "javascript:")
 }
 
 // validateUnblockValue validates and sanitizes the value for an unblock request.

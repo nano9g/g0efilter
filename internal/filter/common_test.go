@@ -728,3 +728,40 @@ func TestOriginalDstTCP(t *testing.T) {
 	t.Log("originalDstTCP requires real TCP connection with iptables REDIRECT, skipping unit test")
 	t.Log("This function is covered by integration tests")
 }
+
+// Blocked/audited decisions log at WARN so they survive LOG_LEVEL=WARN; allowed stays INFO.
+func TestDecisionLogLevels(t *testing.T) {
+	t.Parallel()
+
+	newCapture := func() (*bytes.Buffer, Options) {
+		var buf bytes.Buffer
+
+		return &buf, Options{Logger: slog.New(slog.NewJSONHandler(&buf, nil))} //nolint:exhaustruct
+	}
+
+	conn1, conn2 := net.Pipe()
+
+	defer func() { _ = conn1.Close() }()
+	defer func() { _ = conn2.Close() }()
+
+	buf, opts := newCapture()
+	logBlockedConnection(opts, "https", "not-allowlisted", "evil.com", conn1, "1.2.3.4", 443)
+
+	if !strings.Contains(buf.String(), `"level":"WARN"`) {
+		t.Errorf("blocked connection must log at WARN, got: %s", buf.String())
+	}
+
+	buf, opts = newCapture()
+	logAuditedConnection(opts, "https", "not-allowlisted", "evil.com", conn1, "1.2.3.4", 443)
+
+	if !strings.Contains(buf.String(), `"level":"WARN"`) {
+		t.Errorf("audited connection must log at WARN, got: %s", buf.String())
+	}
+
+	buf, opts = newCapture()
+	logAllowedConnection(opts, "https", "example.com:443", "example.com", conn1)
+
+	if !strings.Contains(buf.String(), `"level":"INFO"`) {
+		t.Errorf("allowed connection must log at INFO, got: %s", buf.String())
+	}
+}

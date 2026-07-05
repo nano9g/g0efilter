@@ -18,6 +18,10 @@ services:
       - ../.env
     environment:
       FILTER_MODE: ${FILTER_MODE:-https}
+      DEFAULT_ACTION: ${DEFAULT_ACTION:-deny}
+      LEARNING_MODE: ${LEARNING_MODE:-false}
+      ENFORCE: ${ENFORCE:-block}
+      PROCESS_INFO: ${PROCESS_INFO:-false}
     cap_add:
       - NET_ADMIN
 

@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/g0lab/g0efilter/internal/netutil"
 )
 
 // Notifier handles sending notifications for security events.
@@ -73,6 +75,8 @@ func NewNotifier() *Notifier {
 		client: &http.Client{
 			Timeout: 10 * time.Second,
 			Transport: &http.Transport{
+				// SO_MARK bypass so notifications are not blocked by our own filter
+				DialContext:        netutil.MarkedDialer(10 * time.Second).DialContext,
 				MaxIdleConns:       10,
 				IdleConnTimeout:    30 * time.Second,
 				DisableCompression: false,

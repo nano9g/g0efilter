@@ -15,6 +15,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/g0lab/g0efilter/internal/policy"
 )
 
 func discardLogger() *slog.Logger {
@@ -90,6 +92,10 @@ func TestLoadConfigDefaults(t *testing.T) {
 		logFile:             "",
 		hostname:            "",
 		mode:                "https",
+		defaultAction:       "deny",
+		learningMode:        false,
+		learner:             nil,
+		dnsHardening:        true,
 		enableRemoteUnblock: false,
 		dashboardHost:       "",
 		dashboardAPIKey:     "",
@@ -113,6 +119,9 @@ func TestLoadConfigCustomValues(t *testing.T) {
 	t.Setenv("LOG_FILE", "/var/log/g0efilter.log")
 	t.Setenv("HOSTNAME", "test-host")
 	t.Setenv("FILTER_MODE", "DNS")
+	t.Setenv("DEFAULT_ACTION", "ALLOW")
+	t.Setenv("LEARNING_MODE", "true")
+	t.Setenv("DNS_HARDENING", "false")
 	t.Setenv("ENABLE_REMOTE_UNBLOCK", "true")
 	t.Setenv("DASHBOARD_HOST", "dash.example.com")
 	t.Setenv("DASHBOARD_API_KEY", "secret123")
@@ -129,6 +138,10 @@ func TestLoadConfigCustomValues(t *testing.T) {
 		logFile:             "/var/log/g0efilter.log",
 		hostname:            "test-host",
 		mode:                "dns",
+		defaultAction:       "allow",
+		learningMode:        true,
+		learner:             nil,
+		dnsHardening:        false,
 		enableRemoteUnblock: true,
 		dashboardHost:       "dash.example.com",
 		dashboardAPIKey:     "secret123",
@@ -140,6 +153,70 @@ func TestLoadConfigCustomValues(t *testing.T) {
 	got := loadConfig()
 	if got != want {
 		t.Fatalf("loadConfig() custom:\ngot  %+v\nwant %+v", got, want)
+	}
+}
+
+func writeTestPolicyFile(t *testing.T, path string) {
+	t.Helper()
+
+	err := os.MkdirAll(filepath.Dir(path), 0o750)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = os.WriteFile(path, []byte("allowlist:\n"), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestResolvePolicyPath(t *testing.T) {
+	lg := slog.New(slog.DiscardHandler)
+
+	tests := []struct {
+		name         string
+		withDefault  bool
+		withFallback bool
+		explicitEnv  bool
+		wantFallback bool
+	}{
+		{"explicit POLICY_PATH wins even when missing", false, true, true, false},
+		{"default kept when present", true, false, false, false},
+		{"fallback used when default missing", false, true, false, true},
+		{"default wins when both exist", true, true, false, false},
+		{"default kept when neither exists", false, false, false, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			defaultPath := filepath.Join(dir, "policy.yaml")
+			fallbackPath := filepath.Join(dir, "policy", "policy.yaml")
+
+			if tt.withDefault {
+				writeTestPolicyFile(t, defaultPath)
+			}
+
+			if tt.withFallback {
+				writeTestPolicyFile(t, fallbackPath)
+			}
+
+			if tt.explicitEnv {
+				t.Setenv("POLICY_PATH", defaultPath)
+			} else {
+				t.Setenv("POLICY_PATH", "")
+			}
+
+			want := defaultPath
+			if tt.wantFallback {
+				want = fallbackPath
+			}
+
+			got := resolvePolicyPath(config{policyPath: defaultPath}, fallbackPath, lg) //nolint:exhaustruct
+			if got.policyPath != want {
+				t.Errorf("policyPath = %q, want %q", got.policyPath, want)
+			}
+		})
 	}
 }
 
@@ -296,8 +373,10 @@ func TestSendLatestKeepsMostRecent(t *testing.T) {
 	ctx := context.Background()
 	ch := make(chan policyUpdate, 1)
 
-	upd1 := policyUpdate{hash: "h1", domains: []string{"a"}, ips: []string{"1.1.1.1"}}
-	upd2 := policyUpdate{hash: "h2", domains: []string{"b"}, ips: []string{"2.2.2.2"}}
+	//nolint:exhaustruct
+	upd1 := policyUpdate{hash: "h1", pol: &policy.Policy{AllowDomains: []string{"a"}, AllowIPs: []string{"1.1.1.1"}}}
+	//nolint:exhaustruct
+	upd2 := policyUpdate{hash: "h2", pol: &policy.Policy{AllowDomains: []string{"b"}, AllowIPs: []string{"2.2.2.2"}}}
 
 	sendLatest(ctx, ch, upd1)
 	sendLatest(ctx, ch, upd2)
@@ -383,7 +462,7 @@ func TestIsInodeUnlinkedUnlinkedFile(t *testing.T) {
 
 	p := f.Name()
 
-	// Remove the directory entry — lstat will fail (ENOENT), not return nlink=0
+	// Remove the directory entry - lstat will fail (ENOENT), not return nlink=0
 	err = os.Remove(p)
 	if err != nil {
 		t.Fatalf("remove temp file: %v", err)
