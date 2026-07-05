@@ -9,7 +9,11 @@ import (
 	"github.com/g0lab/g0efilter/internal/policy"
 )
 
-const learnFlushInterval = 2 * time.Second
+const (
+	learnFlushInterval = 2 * time.Second
+	// learnerMaxSeen bounds memory and policy-file growth; past it new values are dropped.
+	learnerMaxSeen = 10000
+)
 
 // learner batches domains/IPs observed in learning mode and appends them to the
 // policy file. Batching keeps one file write per flush instead of one per flow,
@@ -18,9 +22,10 @@ type learner struct {
 	policyPath string
 	lg         *slog.Logger
 
-	mu      sync.Mutex
-	seen    map[string]struct{}
-	pending []learnEntry
+	mu        sync.Mutex
+	seen      map[string]struct{}
+	pending   []learnEntry
+	capWarned bool
 }
 
 type learnEntry struct {
@@ -58,6 +63,15 @@ func (l *learner) record(kind, value string) {
 	defer l.mu.Unlock()
 
 	if _, dup := l.seen[key]; dup {
+		return
+	}
+
+	if len(l.seen) >= learnerMaxSeen {
+		if !l.capWarned {
+			l.capWarned = true
+			l.lg.Warn("learning.cap_reached", "max", learnerMaxSeen, "dropped", key)
+		}
+
 		return
 	}
 

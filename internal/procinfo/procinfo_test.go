@@ -131,6 +131,22 @@ func TestLookupCaches(t *testing.T) {
 	}
 }
 
+func TestCacheBoundedUnderUniqueFlowChurn(t *testing.T) {
+	t.Parallel()
+
+	p := NewWithRoot(t.TempDir())
+
+	// Every lookup is a fresh flow, so nothing is expired when the cap is hit;
+	// the fallback eviction must still bound the cache.
+	for i := range maxCacheEntries + 50 {
+		p.Lookup("10.0.0.1", 1000+i, "tcp")
+	}
+
+	if len(p.cache) > maxCacheEntries {
+		t.Errorf("cache = %d entries, want <= %d", len(p.cache), maxCacheEntries)
+	}
+}
+
 func TestHexEncodingMatchesProcFormat(t *testing.T) {
 	t.Parallel()
 

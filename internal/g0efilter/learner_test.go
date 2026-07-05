@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/g0lab/g0efilter/internal/policy"
@@ -81,6 +82,24 @@ func TestLearnerInvalidValuesDoNotCorruptPolicy(t *testing.T) {
 
 	if len(pol.AllowDomains) != 1 || len(pol.AllowIPs) != 0 {
 		t.Errorf("invalid values must be rejected, got domains=%v ips=%v", pol.AllowDomains, pol.AllowIPs)
+	}
+}
+
+func TestLearnerSeenCap(t *testing.T) {
+	t.Parallel()
+
+	l := newLearner(filepath.Join(t.TempDir(), "policy.yaml"), slog.New(slog.DiscardHandler))
+
+	for i := range learnerMaxSeen + 50 {
+		l.record("domain", "host-"+strconv.Itoa(i)+".example.com")
+	}
+
+	if len(l.seen) != learnerMaxSeen {
+		t.Errorf("seen = %d entries, want capped at %d", len(l.seen), learnerMaxSeen)
+	}
+
+	if len(l.pending) != learnerMaxSeen {
+		t.Errorf("pending = %d entries, want capped at %d", len(l.pending), learnerMaxSeen)
 	}
 }
 

@@ -17,8 +17,9 @@ import (
 )
 
 const (
-	cacheTTL      = 30 * time.Second
-	maxCmdlineLen = 256
+	cacheTTL        = 30 * time.Second
+	maxCmdlineLen   = 256
+	maxCacheEntries = 4096
 )
 
 // Info identifies the process behind a connection.
@@ -93,7 +94,7 @@ func (p *ProcProvider) Lookup(srcIP string, srcPort int, proto string) (Info, bo
 
 // pruneLocked drops expired entries so the cache stays bounded by recent flows.
 func (p *ProcProvider) pruneLocked() {
-	if len(p.cache) < 4096 {
+	if len(p.cache) < maxCacheEntries {
 		return
 	}
 
@@ -102,6 +103,15 @@ func (p *ProcProvider) pruneLocked() {
 		if now.After(e.expires) {
 			delete(p.cache, k)
 		}
+	}
+
+	// Nothing expired yet: drop arbitrary entries so unique-flow churn stays bounded.
+	for k := range p.cache {
+		if len(p.cache) < maxCacheEntries {
+			break
+		}
+
+		delete(p.cache, k)
 	}
 }
 
