@@ -1,7 +1,6 @@
 [![docker pulls](https://img.shields.io/docker/pulls/g0lab/g0efilter.svg?label=docker%20pulls)](https://hub.docker.com/r/g0lab/g0efilter)
 [![g0efilter CI](https://github.com/g0lab/g0efilter/actions/workflows/ci.yaml/badge.svg)](https://github.com/g0lab/g0efilter/actions/workflows/ci.yaml)
 [![g0efilter Tests](https://github.com/g0lab/g0efilter/actions/workflows/test.yaml/badge.svg)](https://github.com/g0lab/g0efilter/actions/workflows/test.yaml)
-[![Go Report Card](https://goreportcard.com/badge/g0lab/g0efilter)](https://goreportcard.com/report/g0lab/g0efilter)
 [![codecov](https://codecov.io/gh/g0lab/g0efilter/graph/badge.svg?token=owO27TfE79)](https://codecov.io/gh/g0lab/g0efilter)
 
 > [!NOTE]
@@ -36,7 +35,7 @@ Attached containers share g0efilter's network namespace. Traffic to allowlisted 
 
 Outbound traffic on ports 80/443 is redirected by nftables to local proxy services inside g0efilter. The proxies read the HTTP `Host` header (port 80) or the TLS SNI from the ClientHello (port 443, without terminating TLS) and check it against the policy. Allowed connections are spliced through to the original destination at kernel speed; blocked connections are reset. Traffic on other ports is dropped unless the destination IP is allowlisted.
 
-```
+```text
 Start
 |
 +- Destination IP in allowlist? -- Yes -> ALLOW (no redirect)
@@ -117,11 +116,12 @@ Set `default_action: allow` in the policy file to invert the model: traffic pass
 default_action: allow
 allowlist:
   domains:
-    - "api.github.com"        # punches a hole through the denylist
+    - "api.github.com"        # explicitly allow this host even though *.github.com is denylisted
 denylist:
   ips:
     - "192.168.0.0/16"        # block LAN access
   domains:
+    - "*.github.com"          # deny broad GitHub subdomains
     - "*.doubleclick.net"
     - "telemetry.example.com"
 ```
@@ -140,6 +140,41 @@ Because `default_action` lives in the policy file, flipping it is a live-reload 
 
 `PROCESS_INFO=true` enriches flow logs with the owning process (`pid`, `process_name`, `cmdline`, `executable`), resolved via `/proc` and cached per flow. This requires g0efilter to share a PID namespace with the client processes (host deploy, `pid: host`, or `shareProcessNamespace: true`); in a plain network-only sidecar the fields degrade to `process_name=unknown`.
 
+### GitHub Actions (CI egress filtering)
+
+g0efilter can filter egress from GitHub Actions runners. The action starts the g0efilter container with host networking, so all traffic from the job (and later steps) is inspected, and adds a report of blocked/audited connections to the job summary.
+
+```yaml
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Filter egress
+        uses: g0lab/g0efilter@main
+        with:
+          egress-policy: block   # or 'audit' to log without blocking
+          allowed-domains: |
+            *.npmjs.org
+            registry.npmjs.org
+
+      - uses: actions/checkout@v7
+      # ... the rest of the job runs behind the filter
+```
+
+| Input | Description | Default |
+|-------|-------------|---------|
+| `allowed-domains` | Newline-separated domains (wildcards and regex supported) | |
+| `allowed-ips` | Newline-separated IPs/CIDRs | |
+| `egress-policy` | `block` or `audit` | `block` |
+| `mode` | `https` (SNI/Host inspection) or `dns` | `https` |
+| `log-level` | g0efilter log level | `INFO` |
+| `image` | Container image to run | matches the action's release tag, or `:latest` for branch refs |
+
+GitHub's [documented runner communication domains](https://docs.github.com/actions/reference/runners/self-hosted-runners) (`github.com`, `api.github.com`, `*.actions.githubusercontent.com`, `codeload.github.com`, artifact/log storage, release downloads) and the runner's DNS resolvers are always allowed so the workflow itself keeps working. Package registries are **not** in the baseline - if a step pulls containers or packages, add the registry (`ghcr.io`, `*.pkg.github.com`, `registry.npmjs.org`, ...) to `allowed-domains`.
+
+> [!NOTE]
+> Limitations: GitHub-hosted Ubuntu runners only. Traffic from Docker containers started by later steps is filtered only when they use `--network host`; jobs that run inside a container (`container:`) are not supported.
+
 ### Dashboard
 
 The optional **g0efilter-dashboard** container serves a web UI on port 8081. Set `DASHBOARD_HOST` and `DASHBOARD_API_KEY` on g0efilter to ship logs to it.
@@ -153,7 +188,7 @@ The optional **g0efilter-dashboard** container serves a web UI on port 8081. Set
 | Variable | Description | Default |
 | --- | --- | --- |
 | `FILTER_MODE` | `https`, `dns`, or `dns-strict` | `https` |
-| `POLICY_PATH` | Path to policy file inside container | `/app/policy.yaml` |
+| `POLICY_PATH` | Path to policy file inside container. When unset, `/app/policy.yaml` is used if present, then `/app/policy/policy.yaml` (the directory-mount convention). The file is never auto-created. | `/app/policy.yaml` |
 | `DEFAULT_ACTION` | `deny` (allowlist) or `allow` (denylist). Policy file `default_action` wins when set | `deny` |
 | `ENFORCE` | `block` or `audit` (dry-run: log would-be blocks, allow traffic) | `block` |
 | `LEARNING_MODE` | `true` to observe without blocking and auto-append seen domains/IPs to the policy | `false` |
