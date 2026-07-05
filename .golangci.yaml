@@ -13,20 +13,20 @@ linters:
     - exhaustruct  # Too strict
     - mnd  # Too strict
     - gomodguard  # Replaced by gomodguard_v2
-  enable:
-    - gomodguard_v2 
   settings:
     depguard:
       rules:
         main:
           list-mode: lax
           files:
-            - "$pkg:main"
-          allow:
-            - $gostd
-            - g0efilter/internal/...
+            - "$all"
+          deny:
+            - pkg: "math/rand$"
+              desc: "Use math/rand/v2 instead"
     goconst:
       ignore-tests: true
+    gomodguard_v2:
+      local-replace-directives: true
     ireturn:
       allow:
         - anon
