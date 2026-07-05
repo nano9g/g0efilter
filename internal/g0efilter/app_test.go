@@ -95,6 +95,7 @@ func TestLoadConfigDefaults(t *testing.T) {
 		defaultAction:       "deny",
 		learningMode:        false,
 		learner:             nil,
+		dnsHardening:        true,
 		enableRemoteUnblock: false,
 		dashboardHost:       "",
 		dashboardAPIKey:     "",
@@ -120,6 +121,7 @@ func TestLoadConfigCustomValues(t *testing.T) {
 	t.Setenv("FILTER_MODE", "DNS")
 	t.Setenv("DEFAULT_ACTION", "ALLOW")
 	t.Setenv("LEARNING_MODE", "true")
+	t.Setenv("DNS_HARDENING", "false")
 	t.Setenv("ENABLE_REMOTE_UNBLOCK", "true")
 	t.Setenv("DASHBOARD_HOST", "dash.example.com")
 	t.Setenv("DASHBOARD_API_KEY", "secret123")
@@ -139,6 +141,7 @@ func TestLoadConfigCustomValues(t *testing.T) {
 		defaultAction:       "allow",
 		learningMode:        true,
 		learner:             nil,
+		dnsHardening:        false,
 		enableRemoteUnblock: true,
 		dashboardHost:       "dash.example.com",
 		dashboardAPIKey:     "secret123",
@@ -150,6 +153,70 @@ func TestLoadConfigCustomValues(t *testing.T) {
 	got := loadConfig()
 	if got != want {
 		t.Fatalf("loadConfig() custom:\ngot  %+v\nwant %+v", got, want)
+	}
+}
+
+func writeTestPolicyFile(t *testing.T, path string) {
+	t.Helper()
+
+	err := os.MkdirAll(filepath.Dir(path), 0o750)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = os.WriteFile(path, []byte("allowlist:\n"), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestResolvePolicyPath(t *testing.T) {
+	lg := slog.New(slog.DiscardHandler)
+
+	tests := []struct {
+		name         string
+		withDefault  bool
+		withFallback bool
+		explicitEnv  bool
+		wantFallback bool
+	}{
+		{"explicit POLICY_PATH wins even when missing", false, true, true, false},
+		{"default kept when present", true, false, false, false},
+		{"fallback used when default missing", false, true, false, true},
+		{"default wins when both exist", true, true, false, false},
+		{"default kept when neither exists", false, false, false, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			defaultPath := filepath.Join(dir, "policy.yaml")
+			fallbackPath := filepath.Join(dir, "policy", "policy.yaml")
+
+			if tt.withDefault {
+				writeTestPolicyFile(t, defaultPath)
+			}
+
+			if tt.withFallback {
+				writeTestPolicyFile(t, fallbackPath)
+			}
+
+			if tt.explicitEnv {
+				t.Setenv("POLICY_PATH", defaultPath)
+			} else {
+				t.Setenv("POLICY_PATH", "")
+			}
+
+			want := defaultPath
+			if tt.wantFallback {
+				want = fallbackPath
+			}
+
+			got := resolvePolicyPath(config{policyPath: defaultPath}, fallbackPath, lg) //nolint:exhaustruct
+			if got.policyPath != want {
+				t.Errorf("policyPath = %q, want %q", got.policyPath, want)
+			}
+		})
 	}
 }
 

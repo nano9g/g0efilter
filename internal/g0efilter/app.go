@@ -40,6 +40,9 @@ const (
 	retryDelay         = 5 * time.Second
 
 	policyPollInterval = 5 * time.Second
+
+	// fallbackPolicyPath is the directory-mount convention used by the compose examples.
+	fallbackPolicyPath = "/app/policy/policy.yaml"
 )
 
 var (
@@ -64,6 +67,7 @@ func Run(version, date, commit string) error {
 	slog.SetDefault(lg)
 
 	cfg = normalizeMode(cfg, lg)
+	cfg = resolvePolicyPath(cfg, fallbackPolicyPath, lg)
 
 	logStartupInfo(lg, cfg, version, date, commit)
 	logDashboardInfo(lg, cfg)
@@ -145,6 +149,7 @@ type config struct {
 	learningMode        bool
 	learner             *learner
 	auditMode           bool
+	dnsHardening        bool
 	procInfo            *procinfo.ProcProvider
 	enableRemoteUnblock bool
 	dashboardHost       string
@@ -168,6 +173,7 @@ func loadConfig() config {
 		defaultAction:       strings.ToLower(getenvDefault("DEFAULT_ACTION", policy.DefaultActionDeny)),
 		learningMode:        strings.EqualFold(getenvDefault("LEARNING_MODE", "false"), "true"),
 		auditMode:           strings.EqualFold(getenvDefault("ENFORCE", "block"), "audit"),
+		dnsHardening:        strings.EqualFold(getenvDefault("DNS_HARDENING", "true"), "true"),
 		enableRemoteUnblock: strings.EqualFold(getenvDefault("ENABLE_REMOTE_UNBLOCK", "false"), "true"),
 		dashboardHost:       strings.TrimSpace(getenvDefault("DASHBOARD_HOST", "")),
 		dashboardAPIKey:     strings.TrimSpace(getenvDefault("DASHBOARD_API_KEY", "")),
@@ -175,6 +181,45 @@ func loadConfig() config {
 		notificationHost:    strings.TrimSpace(getenvDefault("NOTIFICATION_HOST", "")),
 		notificationKey:     strings.TrimSpace(getenvDefault("NOTIFICATION_KEY", "")),
 	}
+}
+
+// resolvePolicyPath applies the policy-file location fallback: an explicit
+// POLICY_PATH always wins (even if missing), then the default location, then
+// fallbackPath. A missing file is never auto-created — startup stays fail-closed.
+func resolvePolicyPath(cfg config, fallbackPath string, lg *slog.Logger) config {
+	if strings.TrimSpace(os.Getenv("POLICY_PATH")) != "" {
+		return cfg
+	}
+
+	defaultExists := fileExists(cfg.policyPath)
+	fallbackExists := fileExists(fallbackPath)
+
+	switch {
+	case defaultExists && fallbackExists:
+		lg.Warn("policy.path_ambiguous",
+			"chosen", cfg.policyPath,
+			"ignored", fallbackPath,
+			"hint", "both conventional locations exist; set POLICY_PATH to choose explicitly")
+	case fallbackExists:
+		lg.Info("policy.path_fallback",
+			"path", fallbackPath,
+			"reason", cfg.policyPath+" not found; using the directory-mount convention")
+
+		cfg.policyPath = fallbackPath
+	case !defaultExists:
+		lg.Warn("policy.path_missing",
+			"probed", cfg.policyPath+", "+fallbackPath,
+			"hint", "mount a policy file or set POLICY_PATH; the file is not auto-created")
+	}
+
+	return cfg
+}
+
+// fileExists reports whether path exists and is a regular file.
+func fileExists(path string) bool {
+	st, err := os.Stat(path)
+
+	return err == nil && st.Mode().IsRegular()
 }
 
 // setupLearning wires up the learner and starts its flush loop when learning mode is on.
@@ -571,7 +616,7 @@ func startServices(ctx context.Context, cfg config, pol *policy.Policy, lg *slog
 		LearningMode: cfg.learningMode,
 		OnLearn:      learnFunc(cfg.learner),
 		AuditMode:    cfg.auditMode,
-		DNSHardening: strings.EqualFold(getenvDefault("DNS_HARDENING", "true"), "true"),
+		DNSHardening: cfg.dnsHardening,
 	}
 
 	// Assign conditionally: wrapping a nil pointer would make the interface non-nil
