@@ -23,12 +23,10 @@ FILTER_MODE=https scripts/e2e.sh
 FILTER_MODE=dns scripts/e2e.sh
 ```
 
-## Gotchas
+## Notes
 
 - The e2e suite needs Docker and recreates the `examples/build` stack.
-- Normal PR e2e includes `tests/e2e/12_load.sh`; `.github/workflows/load-test.yaml` is only for manual or `run-load-test` labeled custom load runs.
-- DNS mode has kernel conntrack edge cases, so keep DNS source-port and nftables changes covered by e2e tests.
-- Do not edit generated coverage or temporary test output.
+- DNS filtering depends on kernel conntrack behaviour: keep DNS source-port and nftables changes covered by e2e.
 
 ## Style
 
