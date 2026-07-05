@@ -621,7 +621,13 @@ func (handler *dnsHandler) forward(request *dns.Msg) (*dns.Msg, error) {
 		// UDP attempt
 		in, _, err := udpClient.ExchangeContext(ctx, request, up)
 		if err != nil || in == nil {
-			continue // try next upstream
+			// Retry once on a fresh source port: a concurrent forward may hold the rotated one.
+			udpClient.Dialer = netutil.MarkedDNSDialer(handler.timeout)
+
+			in, _, err = udpClient.ExchangeContext(ctx, request, up)
+			if err != nil || in == nil {
+				continue // try next upstream
+			}
 		}
 
 		if !in.Truncated {
