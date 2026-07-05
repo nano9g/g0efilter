@@ -20,6 +20,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  unit:
+    name: action script checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.x
+
+      - name: Syntax-check action scripts
+        run: |
+          for f in action/*.js; do node --check "$f"; done
+
+      - name: Run action unit tests
+        run: node --test 'action/*.test.js'
+
   block:
     name: egress-policy block
     runs-on: ubuntu-latest
@@ -47,6 +66,72 @@ jobs:
           fi
           echo "OK: example.com blocked"
 
+      - name: Allowed HTTP Host works
+        run: curl -sS --max-time 20 http://example.org -o /dev/null
+
+      - name: Non-allowlisted HTTP Host is blocked
+        run: |
+          if curl -s --max-time 20 http://example.com -o /dev/null; then
+            echo "http://example.com should have been blocked"
+            exit 1
+          fi
+          echo "OK: http://example.com blocked"
+
+  domain-patterns:
+    name: allowed-domains wildcard + regex
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # Exercise YAML quoting of wildcard and regex patterns.
+      - name: Start g0efilter (block)
+        uses: ./
+        with:
+          allowed-domains: |
+            *.example.com
+            /^example\.org$/
+
+      - name: Wildcard matches a subdomain
+        run: curl -sSf --max-time 20 https://www.example.com -o /dev/null
+
+      - name: Regex-allowed domain works
+        run: curl -sSf --max-time 20 https://example.org -o /dev/null
+
+      - name: Wildcard does not match the apex
+        run: |
+          if curl -sf --max-time 20 https://example.com -o /dev/null; then
+            echo "example.com apex should not match *.example.com"
+            exit 1
+          fi
+          echo "OK: apex not matched by wildcard"
+
+  dns:
+    name: mode dns
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # The action maps dns mode to DNS_PORT=5353 on GitHub runners.
+      - name: Start g0efilter (dns)
+        uses: ./
+        with:
+          mode: dns
+          allowed-domains: |
+            example.org
+
+      - name: Allowed domain resolves and connects
+        run: curl -sSf --max-time 20 https://example.org -o /dev/null
+
+      - name: Non-allowlisted domain fails to resolve
+        run: |
+          if curl -sf --max-time 20 https://example.com -o /dev/null; then
+            echo "example.com should not resolve under dns mode"
+            exit 1
+          fi
+          echo "OK: example.com resolution blocked"
+
   audit:
     name: egress-policy audit
     runs-on: ubuntu-latest
@@ -61,3 +146,36 @@ jobs:
 
       - name: Non-allowlisted domain passes in audit mode
         run: curl -sSf --max-time 20 https://example.com -o /dev/null
+
+  invalid-input:
+    name: input validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Invalid mode is rejected
+        id: bad-mode
+        continue-on-error: true
+        uses: ./
+        with:
+          mode: bogus
+
+      - name: Invalid egress-policy is rejected
+        id: bad-policy
+        continue-on-error: true
+        uses: ./
+        with:
+          egress-policy: bogus
+
+      - name: Assert the action failed for both
+        run: |
+          if [ "${{ steps.bad-mode.outcome }}" != "failure" ]; then
+            echo "action should have failed for invalid mode"
+            exit 1
+          fi
+          if [ "${{ steps.bad-policy.outcome }}" != "failure" ]; then
+            echo "action should have failed for invalid egress-policy"
+            exit 1
+          fi
+          echo "OK: invalid mode and egress-policy both rejected"

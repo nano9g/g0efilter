@@ -100,9 +100,17 @@ function buildSummary(raw) {
   return md;
 }
 
-const summary = buildSummary(containerLogs());
-if (process.env.GITHUB_STEP_SUMMARY) {
-  fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary + "\n");
-} else {
-  console.log(summary);
+function main() {
+  const summary = buildSummary(containerLogs());
+  if (process.env.GITHUB_STEP_SUMMARY) {
+    fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary + "\n");
+  } else {
+    console.log(summary);
+  }
 }
+
+if (require.main === module) {
+  main();
+}
+
+module.exports = { parseLine, collectDecisions, escapeCell, buildSummary };
