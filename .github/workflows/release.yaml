@@ -85,6 +85,7 @@ jobs:
     # Prereleases (v1.0.0-rc1) must not move the rolling tag
     if: ${{ !contains(github.ref_name, '-') }}
     permissions:
+      # Needed to force-push the rolling major tag
       contents: write
     steps:
       - name: Checkout

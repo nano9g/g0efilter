@@ -13,12 +13,15 @@ on:
         description: "The major tag to move (e.g. v0)"
         required: true
 
-permissions:
-  contents: write
-
 jobs:
   tag:
     runs-on: ubuntu-latest
+    permissions:
+      # Needed to force-push the rolling major tag
+      contents: write
+    env:
+      MAJOR_VERSION: ${{ github.event.inputs.major_version }}
+      TARGET: ${{ github.event.inputs.target }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -28,16 +31,16 @@ jobs:
 
       - name: Validate inputs
         run: |
-          case "${{ github.event.inputs.major_version }}" in
+          case "$MAJOR_VERSION" in
             v[0-9]|v[0-9][0-9]) ;;
             *) echo "::error::major_version must look like v0/v1"; exit 1 ;;
           esac
-          git rev-parse "${{ github.event.inputs.target }}^{commit}" >/dev/null \
-            || { echo "::error::target ${{ github.event.inputs.target }} does not exist"; exit 1; }
+          git rev-parse "$TARGET^{commit}" >/dev/null \
+            || { echo "::error::target $TARGET does not exist"; exit 1; }
 
       - name: Move major tag
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -f "${{ github.event.inputs.major_version }}" "${{ github.event.inputs.target }}"
-          git push origin "${{ github.event.inputs.major_version }}" --force
+          git tag -f "$MAJOR_VERSION" "$TARGET"
+          git push origin "$MAJOR_VERSION" --force
