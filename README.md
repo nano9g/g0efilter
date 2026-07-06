@@ -143,7 +143,10 @@ The optional **g0efilter-dashboard** container serves a web UI on port 8081. Set
 
 ![g0efilter-dashboard-example](https://raw.githubusercontent.com/g0lab/g0efilter/main/examples/images/g0efilter-dashboard-example.png)
 
-Remote unblock lets administrators unblock domains/IPs from the dashboard UI. It is disabled by default and must be protected behind authentication middleware. See [docs/remote-unblock.md](docs/remote-unblock.md) for endpoints and a Traefik example.
+Remote unblock lets administrators unblock domains/IPs from the dashboard UI. Instances poll for approved requests and apply them via live reload. It is disabled by default. To enable it, set `ENABLE_REMOTE_UNBLOCK=true` on g0efilter along with `DASHBOARD_HOST` and `DASHBOARD_API_KEY`. See [docs/remote-unblock.md](docs/remote-unblock.md) for setup, endpoints, and a Traefik example.
+
+> [!WARNING]
+> Do not enable remote unblock without protecting `POST /api/v1/unblocks` behind authentication middleware. Anyone who can reach that endpoint can modify your allowlist.
 
 ### Example docker-compose.yaml
 
