@@ -24,6 +24,7 @@ import (
 	"github.com/g0lab/g0efilter/internal/actions"
 	"github.com/g0lab/g0efilter/internal/filter"
 	"github.com/g0lab/g0efilter/internal/logging"
+	"github.com/g0lab/g0efilter/internal/netutil"
 	"github.com/g0lab/g0efilter/internal/nftables"
 	"github.com/g0lab/g0efilter/internal/policy"
 	"github.com/g0lab/g0efilter/internal/procinfo"
@@ -926,6 +927,8 @@ func pollRemoteUnblocks(
 ) {
 	client := &http.Client{
 		Timeout: 10 * time.Second,
+		// SO_MARK bypass so unblock polling is not filtered like client traffic.
+		Transport: &http.Transport{DialContext: netutil.MarkedDialer(10 * time.Second).DialContext},
 	}
 
 	baseURL := cfg.dashboardHost
