@@ -200,10 +200,10 @@ jobs:
 | `log-level` | g0efilter log level | `INFO` |
 | `image` | Container image to run | matches the action's release tag, or `:latest` for branch refs |
 
-GitHub's [documented runner communication domains](https://docs.github.com/actions/reference/runners/self-hosted-runners) (`github.com`, `api.github.com`, `*.actions.githubusercontent.com`, `codeload.github.com`, artifact/log storage, release downloads) and the runner's DNS resolvers are always allowed so the workflow itself keeps working. Package registries are **not** in the baseline - if a step pulls containers or packages, add the registry (`ghcr.io`, `*.pkg.github.com`, `registry.npmjs.org`, ...) to `allowed-domains`.
+GitHub's [documented runner communication domains](https://docs.github.com/actions/reference/runners/self-hosted-runners) and the runner's DNS resolvers are always allowed so the workflow itself keeps working. Package registries are **not** in the baseline - if a step pulls containers or packages, add the registry (`ghcr.io`, `*.pkg.github.com`, `registry.npmjs.org`, ...) to `allowed-domains`.
 
 > [!NOTE]
-> Limitations: GitHub-hosted Ubuntu runners only. Traffic from Docker containers started by later steps is filtered only when they use `--network host`; jobs that run inside a container (`container:`) are not supported. `egress-policy: audit` requires a g0efilter release with audit mode (newer than v0.5.13) - on older images it enforces `block`.
+> Limitations: GitHub-hosted Ubuntu runners only. Traffic from Docker containers started by later steps is filtered only when they use `--network host`; jobs that run inside a container (`container:`) are not supported.
 
 ### Dashboard
 
@@ -249,9 +249,6 @@ The optional **g0efilter-dashboard** container serves a web UI on port 8081. Set
 | `NOTIFICATION_IGNORE_DOMAINS` | Domains to skip for notifications (wildcards ok) | unset |
 | `NFLOG_BUFSIZE` | Netfilter log buffer size | `96` |
 | `NFLOG_QTHRESH` | Netfilter log queue threshold | `50` |
-
-> [!NOTE]
-> Most hosts need no DNS source-port tuning. In DNS modes, upstream UDP forwards bind to `61000-64999` to avoid conntrack collisions with redirected client queries. If you widen `net.ipv4.ip_local_port_range` past `60999`, reserve that window with `net.ipv4.ip_local_reserved_ports`.
 
 #### g0efilter-dashboard
 

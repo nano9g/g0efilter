@@ -18,18 +18,27 @@ Keep PRs focused and use a conventional title when it fits:
 fix(scope): short description
 ```
 
-Run the checks that match the files you touched:
+Run the checks and tests that match the files you touched.
+
+Go:
 
 ```sh
 go mod tidy
-git diff --exit-code
-go vet ./...
 go test -race -covermode=atomic -coverprofile=coverage.txt ./...
 golangci-lint run --timeout=10m ./...
+```
+
+Action:
+
+```sh
 for f in action/*.js; do node --check "$f"; done
 node --test 'action/*.test.js'
+bash action/setup.test.sh
+```
+
+Docker/e2e:
+
+```sh
 FILTER_MODE=https scripts/e2e.sh
 FILTER_MODE=dns scripts/e2e.sh
 ```
-
-Normal PR e2e includes `12_load.sh`; the `load-test` workflow is for manual or labeled custom load runs.

@@ -11,14 +11,27 @@ g0efilter is a Go egress-filtering sidecar plus a small GitHub Action wrapper.
 
 ## Build, Test, Lint
 
+Run the groups that match the files touched.
+
+Go:
+
 ```sh
 go mod tidy
-git diff --exit-code
-go vet ./...
 go test -race -covermode=atomic -coverprofile=coverage.txt ./...
 golangci-lint run --timeout=10m ./...
+```
+
+Action:
+
+```sh
 for f in action/*.js; do node --check "$f"; done
 node --test 'action/*.test.js'
+bash action/setup.test.sh
+```
+
+Docker/e2e:
+
+```sh
 FILTER_MODE=https scripts/e2e.sh
 FILTER_MODE=dns scripts/e2e.sh
 ```
@@ -32,4 +45,4 @@ FILTER_MODE=dns scripts/e2e.sh
 
 - Keep comments short and only for non-obvious constraints, security rationale, or workarounds.
 - Let code and test names carry the obvious parts.
-- Use no em dashes and no emojis.
+- Use no em dashes, no emojis, and no other unicode characters when not needed.
