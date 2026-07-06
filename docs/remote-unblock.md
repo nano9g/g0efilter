@@ -5,6 +5,19 @@ Administrators can unblock domains/IPs from the dashboard UI; g0efilter instance
 > [!WARNING]
 > Disabled by default. Only enable behind authentication middleware: `POST /api/v1/unblocks` must be protected (Authelia, Authentik, PocketID, ...) or anyone reaching the dashboard can modify your allowlist.
 
+## Enabling
+
+Set these on **g0efilter** (the dashboard exposes the API-key endpoints automatically, no flag needed):
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `ENABLE_REMOTE_UNBLOCK` | yes | Set to `true` to start the poller |
+| `DASHBOARD_HOST` | yes | Dashboard URL (already set for log shipping) |
+| `DASHBOARD_API_KEY` | yes | Must match `API_KEY` on the dashboard |
+| `UNBLOCK_POLL_INTERVAL` | no | Poll interval, default `10s` |
+
+g0efilter logs `remote_unblock.enabled` at startup once all three required values are set. Approved requests are appended to the instance's policy file and applied via live reload.
+
 ## API endpoints
 
 | Endpoint | Auth | Description |
