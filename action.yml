@@ -1,10 +1,12 @@
 ---
 name: "g0efilter"
+
 description: >-
   Filter egress traffic from GitHub Actions runners. Non-allowlisted
-  connections are blocked (or logged in audit mode) using nftables and
-  TLS SNI / HTTP Host inspection, and a summary of decisions is added
-  to the job summary.
+  connections are blocked, or logged in audit mode, using nftables and
+  TLS SNI / HTTP Host inspection. A summary of decisions is added to the
+  job summary.
+
 branding:
   icon: shield
   color: green
@@ -12,36 +14,50 @@ branding:
 inputs:
   allowed-domains:
     description: >-
-      Newline-separated domains to allow. Wildcards (*.example.com) and
-      regex (/^cache-[0-9]+\.example\.com$/) are supported. GitHub's own
-      infrastructure is always allowed so the workflow can run.
+      Newline-separated domains to allow. Supports wildcards
+      (*.example.com) and regex patterns (/^cache-[0-9]+\.example\.com$/).
+      Required GitHub Actions infrastructure is always allowed so the
+      workflow can run.
     required: false
     default: ""
+
   allowed-ips:
-    description: "Newline-separated IPs/CIDRs to allow. The runner's DNS resolvers are always allowed."
+    description: >-
+      Newline-separated IPs/CIDRs to allow. The runner's DNS resolvers are
+      always allowed.
     required: false
     default: ""
+
   egress-policy:
-    description: "block (enforce) or audit (log would-be-blocked traffic without blocking)"
+    description: >-
+      Egress policy to apply. Use `block` to enforce, or `audit` to log
+      would-be-blocked traffic without blocking it.
     required: false
     default: "block"
+
   mode:
-    description: "https (TLS SNI / HTTP Host inspection) or dns (resolution filtering)"
+    description: >-
+      Filtering mode. Use `https` for TLS SNI / HTTP Host inspection, or
+      `dns` for resolution filtering.
     required: false
     default: "https"
+
   log-level:
-    description: "g0efilter log level (DEBUG, INFO, WARN, ERROR)"
+    description: >-
+      g0efilter log level: `TRACE`, `DEBUG`, `INFO`, `WARN`, or `ERROR`.
     required: false
     default: "INFO"
+
   image:
     description: >-
       g0efilter container image to run. Defaults to the image matching the
-      action's release tag (e.g. uses: g0lab/g0efilter@v0.6.0 runs
-      g0efilter:v0.6.0), or :latest when referenced via a branch.
+      action's release tag, for example `uses: g0lab/g0efilter@v0.6.0`
+      runs `g0efilter:v0.6.0`. When referenced from a branch, defaults to
+      `g0efilter:latest`.
     required: false
     default: ""
 
 runs:
-  using: node24
+  using: "node24"
   main: action/main.js
   post: action/post.js

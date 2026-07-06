@@ -5,6 +5,7 @@ set -euo pipefail
 
 MODE="${FILTER_MODE:-https}"
 POLICY="${EGRESS_POLICY:-block}"
+LOG_LEVEL_VALUE="${LOG_LEVEL:-INFO}"
 
 # Default image: the release matching the action's tag, so pinning the action
 # pins the filter too; :latest when used via a branch ref.
@@ -24,6 +25,11 @@ case "$POLICY" in
   block|audit) ;;
   *) echo "::error::egress-policy must be 'block' or 'audit' (got '$POLICY')"; exit 1 ;;
 esac
+case "${LOG_LEVEL_VALUE^^}" in
+  TRACE|DEBUG|INFO|WARN|WARNING|ERROR) LOG_LEVEL_VALUE="${LOG_LEVEL_VALUE^^}" ;;
+  *) echo "::error::log-level must be one of TRACE, DEBUG, INFO, WARN, or ERROR (got '$LOG_LEVEL_VALUE')"; exit 1 ;;
+esac
+[ "$LOG_LEVEL_VALUE" = "WARNING" ] && LOG_LEVEL_VALUE="WARN"
 
 WORKDIR="${RUNNER_TEMP:-/tmp}/g0efilter"
 mkdir -p "$WORKDIR/policy"
@@ -102,7 +108,7 @@ DOCKER_ARGS=(
   -e POLICY_PATH=/app/policy/policy.yaml
   -e FILTER_MODE="$MODE"
   -e ENFORCE="$ENFORCE"
-  -e LOG_LEVEL="${LOG_LEVEL:-INFO}"
+  -e LOG_LEVEL="$LOG_LEVEL_VALUE"
 )
 
 # Host :53 is systemd-resolved; the NAT redirect still captures DNS to the

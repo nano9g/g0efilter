@@ -42,6 +42,9 @@ jobs:
       - name: Run action unit tests
         run: node --test 'action/*.test.js'
 
+      - name: Run setup.sh validation tests
+        run: bash action/setup.test.sh
+
   block:
     name: egress-policy block
     runs-on: ubuntu-latest
@@ -181,7 +184,14 @@ jobs:
         with:
           egress-policy: bogus
 
-      - name: Assert the action failed for both
+      - name: Invalid log-level is rejected
+        id: bad-level
+        continue-on-error: true
+        uses: ./
+        with:
+          log-level: bogus
+
+      - name: Assert the action failed for all
         run: |
           if [ "${{ steps.bad-mode.outcome }}" != "failure" ]; then
             echo "action should have failed for invalid mode"
@@ -193,4 +203,9 @@ jobs:
             exit 1
           fi
 
-          echo "OK: invalid mode and egress-policy both rejected"
+          if [ "${{ steps.bad-level.outcome }}" != "failure" ]; then
+            echo "action should have failed for invalid log-level"
+            exit 1
+          fi
+
+          echo "OK: invalid mode, egress-policy, and log-level all rejected"
