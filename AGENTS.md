@@ -6,6 +6,7 @@ g0efilter is a Go egress-filtering sidecar plus a small GitHub Action wrapper.
 
 - `cmd/` and `internal/` contain the Go binaries and packages.
 - `action/` and `action.yml` contain the GitHub Action scripts and metadata.
+- `docs/` contains detailed user documentation split out from the README.
 - `tests/e2e/`, `scripts/`, and `examples/build/` contain Docker-based end-to-end coverage.
 - `internal/dashboard/ui/` is embedded dashboard UI code.
 
@@ -40,6 +41,7 @@ FILTER_MODE=dns scripts/e2e.sh
 
 - The e2e suite needs Docker and recreates the `examples/build` stack.
 - DNS filtering depends on kernel conntrack behaviour: keep DNS source-port and nftables changes covered by e2e.
+- Keep README front-door content and detailed `docs/` pages in sync when changing user-facing behavior, configuration, or GitHub Action inputs.
 
 ## Style
 
