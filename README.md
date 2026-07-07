@@ -90,7 +90,7 @@ allowlist:
     - 'github.com'                                 # exact
     - '*.alpinelinux.org'                          # wildcard, any subdomain level
     - 'bucket.*.r2.cloudflarestorage.com'          # wildcard works mid-name too
-    - '/^cache-[0-9]+\.example\.com/'              # regex (single-quote it in YAML)
+    - '/cache-[0-9]+\.example\.com/'              # regex (single-quote it in YAML)
 ```
 
 Each `*` matches one or more characters including dots. Regex entries are slash-delimited, matched case-insensitively against the whole hostname (anchoring is automatic), and compiled with Go's linear-time RE2 engine. Ready-made example policies live in [examples/policy/](https://github.com/g0lab/g0efilter/tree/main/examples/policy).
